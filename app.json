@@ -4,29 +4,16 @@
     "slug": "cook-dex",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#1E293B"
-    },
     "ios": {
       "supportsTablet": true
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
-        "backgroundColor": "#1E293B"
-      },
       "package": "com.cookdex.app",
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ]
-    },
-    "web": {
-      "favicon": "./assets/icon.png"
     },
     "plugins": [
       [
@@ -37,9 +24,7 @@
       ]
     ],
     "extra": {
-      "eas": {
-        "projectId": "620ec9a4-5efc-4496-b1e9-189bdf06e91c"
-      }
+      "eas": {}
     }
   }
 }
