@@ -22,6 +22,8 @@
       "package": "com.cookdex.app",
       "permissions": [
         "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -37,6 +39,12 @@
       "eas": {
         "projectId": "620ec9a4-5efc-4496-b1e9-189bdf06e91c"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/620ec9a4-5efc-4496-b1e9-189bdf06e91c"
     }
   }
 }
