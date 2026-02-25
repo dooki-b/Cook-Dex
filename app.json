@@ -9,7 +9,7 @@
     "splash": {
       "image": "./assets/images/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#1E293B"
+      "backgroundColor": "#FFB347"
     },
     "ios": {
       "supportsTablet": true
@@ -17,7 +17,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
-        "backgroundColor": "#1E293B"
+        "backgroundColor": "#FFB347"
       },
       "package": "com.cookdex.app",
       "permissions": [
@@ -34,9 +34,7 @@
       ]
     ],
     "extra": {
-      "eas": {
-        "projectId": "620ec9a4-5efc-4496-b1e9-189bdf06e91c"
-      }
+      "eas": {}
     }
   }
 }
