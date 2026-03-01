@@ -9,7 +9,7 @@
     "splash": {
       "image": "./assets/images/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#E97D22"
+      "backgroundColor": "#FFB347"
     },
     "ios": {
       "supportsTablet": true
@@ -22,8 +22,6 @@
       "package": "com.cookdex.app",
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -31,20 +29,13 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Cook-Dex(쿡덱스)가 식재료를 스캔하고 분석하기 위해 카메라 접근 권한을 필요로 합니다."
+          "cameraPermission": "Cook-Dex(쿡덱스)가 식재료를 스캔하기 위해 카메라 접근 권한이 필요합니다.",
+          "microphonePermission": "동영상 레시피 기록 등을 위해 마이크 접근 권한이 필요합니다."
         }
       ]
     ],
     "extra": {
-      "eas": {
-        "projectId": "620ec9a4-5efc-4496-b1e9-189bdf06e91c"
-      }
-    },
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
-    "updates": {
-      "url": "https://u.expo.dev/620ec9a4-5efc-4496-b1e9-189bdf06e91c"
+      "eas": {}
     }
   }
 }
