@@ -16,7 +16,13 @@ const COMMON_INGREDIENTS = ["감자", "고구마", "양파", "대파", "마늘",
 
 const windowHeight = Dimensions.get('window').height;
 
-// JSON 진공청소기
+const calculateLevel = (exp) => {
+  if (exp < 30) return { level: 1, title: "🍳 요리 쪼렙", nextExp: 30 };
+  if (exp < 100) return { level: 2, title: "🔪 견습 요리사", nextExp: 100 };
+  if (exp < 300) return { level: 3, title: "👨‍🍳 수석 셰프", nextExp: 300 };
+  return { level: 'MAX', title: "👑 마스터 셰프", nextExp: exp };
+};
+
 const extractJSON = (rawText) => {
   try {
     const start = rawText.indexOf('{');
@@ -37,11 +43,9 @@ export default function HomeScreen() {
   const [userName, setUserName] = useState("셰프");
   const [userLevel, setUserLevel] = useState("초보 요리사 🍳");
 
-  // 🚨 텍스트 입력 전용 상태 (복구 완료)
   const [ingredientSearch, setIngredientSearch] = useState("");
   const [selectedIngredients, setSelectedIngredients] = useState([]); 
   
-  // 🚨 텍스트 스튜디오 모달 전용 상태 (복구 완료)
   const [showBottomModal, setShowBottomModal] = useState(false);
   const [isCurating, setIsCurating] = useState(false);
   const [curationThemes, setCurationThemes] = useState(null); 
@@ -61,11 +65,36 @@ export default function HomeScreen() {
   const [cookingSteps, setCookingSteps] = useState([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
 
+  // 🚨 [신규 추가] 법적 면책 조항 모달 상태
+  const [showLegalModal, setShowLegalModal] = useState(false);
+
   useEffect(() => {
     const showSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => setKeyboardHeight(e.endCoordinates.height));
     const hideSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardHeight(0));
+    
+    // 🚨 앱 실행 시 법적 동의 여부 체크
+    const checkLegalAgreement = async () => {
+      try {
+        const hasAgreed = await AsyncStorage.getItem('cookdex_legal_agreed');
+        if (hasAgreed !== 'true') {
+          setShowLegalModal(true); // 동의 기록이 없으면 팝업 띄움
+        }
+      } catch (e) {}
+    };
+    checkLegalAgreement();
+
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
+
+  // 🚨 동의 버튼 누를 때 실행되는 함수
+  const handleAgreeLegal = async () => {
+    try {
+      await AsyncStorage.setItem('cookdex_legal_agreed', 'true');
+      setShowLegalModal(false);
+    } catch (e) {
+      Alert.alert("에러", "동의 상태 저장에 실패했습니다.");
+    }
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -94,7 +123,6 @@ export default function HomeScreen() {
     }, [])
   );
 
-  // 🚨 QA 모드 (카메라 스캔 횟수 무한 충전)
   const refillQA = async () => {
     try {
       await AsyncStorage.setItem('cookdex_daily_limit', JSON.stringify({ date: new Date().toLocaleDateString(), left: 9999 }));
@@ -103,7 +131,12 @@ export default function HomeScreen() {
     } catch (e) {}
   };
 
-  // 🚨 AI 카메라 스캐너 진입 (횟수 차감은 여기서 확인)
+  // 테스트용: 동의 기록 초기화 버튼 (나중에 지울 수 있음)
+  const resetLegal = async () => {
+    await AsyncStorage.removeItem('cookdex_legal_agreed');
+    Alert.alert("초기화", "법적 동의 기록이 초기화되었습니다. 앱을 껐다 켜보세요.");
+  };
+
   const handleScanPress = () => {
     if (scansLeft > 0) {
       router.push('/scanner');
@@ -112,7 +145,6 @@ export default function HomeScreen() {
     }
   };
 
-  // 🚨 [복구된 텍스트 태그 기능]
   const toggleIngredient = (ing) => {
     if (selectedIngredients.includes(ing)) setSelectedIngredients(prev => prev.filter(i => i !== ing));
     else setSelectedIngredients(prev => [...prev, ing]);
@@ -128,27 +160,29 @@ export default function HomeScreen() {
   const filteredIngredients = COMMON_INGREDIENTS.filter(i => i.includes(ingredientSearch) && !selectedIngredients.includes(i));
   const forceScrollToInput = () => { setTimeout(() => { if (scrollViewRef.current && inputBoxY) scrollViewRef.current.scrollTo({ y: Math.max(0, inputBoxY - (windowHeight * 0.25)), animated: true }); }, 350); };
 
-  // 🚨 [복구된 무제한 무료 텍스트 레시피 AI] (카메라 화면으로 안 넘어가고 여기서 다 처리함!)
   const getCurationThemes = async (customStyleStr = "") => {
     let finalIngredients = [...selectedIngredients];
     if (ingredientSearch.trim()) finalIngredients.push(ingredientSearch.trim());
 
     if (finalIngredients.length === 0) { Alert.alert("알림", "식재료를 먼저 추가해 주세요!"); return; }
     
-    // UI 초기화 및 모달 띄우기
     setIngredientSearch("");
     setShowBottomModal(true); setIsCurating(true); setCurationThemes(null); setTextRecipeResult(null); setShoppingList([]);
     
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-      const systemPrompt = `너는 최고의 셰프 '쿡덱스'야. 식재료를 분석해 3가지 요리 테마를 제안해.\n[식재료]: ${finalIngredients.join(', ')}\n${customStyleStr ? `[🚨요청 스타일🚨]: ${customStyleStr}` : ''}\n오직 아래 JSON 형식으로만 대답해라. 마크다운 절대 금지.\n{ "curation_themes": [ { "theme_title": "요리 이름", "match_reason": "추천 이유 1줄", "badge_icon": "이모지", "ui_accent_color": "#FF8C00" } ] }`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+      const savedDiet = await AsyncStorage.getItem('cookdex_diet_goal') || '없음';
+      const currentTime = new Date().getHours() < 11 ? "아침" : new Date().getHours() < 16 ? "점심" : "저녁/야식";
+      
+      const systemPrompt = `너는 최고의 셰프 '쿡덱스'야. 식재료를 분석해 3가지 요리 테마를 제안해.\n[식재료]: ${finalIngredients.join(', ')}\n[상황]: 현재 시간은 ${currentTime}, 식단 목표는 ${savedDiet}\n${customStyleStr ? `[🚨요청 스타일🚨]: ${customStyleStr} (이 스타일과 분위기에 맞춰서 제안해!)` : ''}\n반드시 JSON 형식으로만 대답해. 마크다운(\`\`\`json 등) 절대 금지.\n{ "curation_themes": [ { "theme_title": "요리 이름", "match_reason": "추천 이유 1줄", "badge_icon": "이모지 1개", "ui_accent_color": "#FF8C00" } ] }`;
 
       const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }] }) });
       const data = await response.json();
+      
       if (!response.ok) throw new Error(`[${response.status}] ${data.error?.message}`);
 
-      const rawText = data.candidates[0].content.parts[0].text;
-      const parsedData = extractJSON(rawText) || JSON.parse(rawText.replace(/```json/g, '').replace(/```/g, ''));
+      let rawText = data.candidates[0].content.parts[0].text.trim().replace(/```json/g, '').replace(/```/g, ''); 
+      const parsedData = JSON.parse(rawText);
       setCurationThemes(parsedData.curation_themes.slice(0, 3));
     } catch (error) { 
       Alert.alert("안내", `테마를 불러오지 못했습니다.\n상세: ${error.message}`); 
@@ -159,15 +193,16 @@ export default function HomeScreen() {
   const generateFinalRecipe = async (theme) => {
     setIsGeneratingRecipe(true);
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-      const systemPrompt = `너는 셰프야. 재료(${selectedIngredients.join(', ')})를 가지고 [${theme.theme_title}] 레시피를 작성해.\n오직 아래 JSON 형식으로만 대답해라.\n{ "safety_warning": "위생 경고 필요시 작성, 없으면 null", "substitutions": [ { "original": "필요한데 유저가 입력 안한 재료", "substitute": "대체재", "reason": "대체 이유" } ], "shopping_list": ["대체불가 필수 마트 구매 재료"], "recipe_markdown": "무조건 첫 줄은 '# ${theme.theme_title}'. 조리 순서는 무조건 '1. ', '2. ' 같은 숫자로 시작할 것." }`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+      const savedAllergies = await AsyncStorage.getItem('cookdex_allergies') || '없음';
+      const systemPrompt = `너는 셰프야. 재료(${selectedIngredients.join(', ')})를 가지고 [${theme.theme_title}] 레시피를 작성해.\n유저의 알레르기: ${savedAllergies}\n반드시 아래 JSON 형식으로만 대답해. 마크다운(\`\`\`json 등) 절대 금지.\n{ "safety_warning": "위생 경고 필요시 작성, 없으면 null", "substitutions": [ { "original": "필요한데 유저가 입력 안한 재료", "substitute": "대체재", "reason": "대체 이유" } ], "shopping_list": ["대체불가 필수 마트 구매 재료"], "recipe_markdown": "무조건 첫 줄은 '# ${theme.theme_title}'. 조리 순서는 무조건 '1. ', '2. ' 같은 숫자로 시작할 것." }`;
       
       const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }] }) });
       const data = await response.json();
       if (!response.ok) throw new Error(`[${response.status}] ${data.error?.message}`);
 
-      const rawText = data.candidates[0].content.parts[0].text;
-      const parsedData = extractJSON(rawText) || JSON.parse(rawText.replace(/```json/g, '').replace(/```/g, ''));
+      let rawText = data.candidates[0].content.parts[0].text.trim().replace(/```json/g, '').replace(/```/g, ''); 
+      const parsedData = JSON.parse(rawText);
 
       if (parsedData.safety_warning && parsedData.safety_warning !== "null") Alert.alert("🚨 쿡덱스 위생/안전 경고!", parsedData.safety_warning);
       setShoppingList(parsedData.shopping_list && Array.isArray(parsedData.shopping_list) ? parsedData.shopping_list : []);
@@ -190,7 +225,7 @@ export default function HomeScreen() {
   const startCookingMode = () => {
     if (!textRecipeResult) return;
     const extractedSteps = textRecipeResult.split('\n').filter(line => /^\d+\.\s/.test(line.trim())).map(line => line.replace(/^\d+\.\s/, '').replace(/\*\*/g, '').trim());
-    if (extractedSteps.length === 0) { Alert.alert("알림", "조리 단계를 명확히 인식하지 못했습니다."); return; }
+    if (extractedSteps.length === 0) { Alert.alert("알림", "조리 단계를 명확히 인식하지 못했습니다. 일반 텍스트 모드를 이용해주세요."); return; }
     setCookingSteps(extractedSteps); setCurrentStepIndex(0); setIsCookingMode(true);
     Speech.speak(extractedSteps[0], { language: 'ko-KR', rate: 0.95, pitch: 1.0 });
   };
@@ -228,7 +263,7 @@ export default function HomeScreen() {
         if (isSharing) {
           await setDoc(doc(db, "global_recipes", recipeId), { id: recipeId, content: textRecipeResult, authorId: currentUser.uid, authorName: currentUser.displayName || "익명 셰프", createdAt: new Date().toISOString(), likes: 0 });
           Alert.alert("광장에 등록 완료! 🌍✨", `레시피를 공유하여 엄청난 보상을 받았습니다! (+${earnedExp} EXP)`);
-        } else Alert.alert("내 주방 저장 완료! 🍳", `레시피가 저장되었습니다. (+${earnedExp} EXP)`);
+        } else Alert.alert("내 주방 저장 완료! 🍳", `레시피가 조용히 저장되었습니다. (+${earnedExp} EXP)`);
       }
     } catch (error) { alert("저장 에러"); }
   };
@@ -248,8 +283,45 @@ export default function HomeScreen() {
     setShowStyleModal(false); getCurationThemes(styleStr);
   };
 
+  const currentLevelInfo = calculateLevel(userExp);
+  const expProgress = currentLevelInfo.level === 'MAX' ? 100 : (userExp / currentLevelInfo.nextExp) * 100;
+
   return (
     <SafeAreaView style={styles.container}>
+      
+      {/* 🚨 법적 면책 조항 모달 (최초 1회 강제) */}
+      <Modal visible={showLegalModal} transparent={true} animationType="fade" onRequestClose={() => {}}>
+        <View style={styles.legalModalOverlay}>
+          <View style={styles.legalModalContent}>
+            <Text style={styles.legalModalTitle}>🚨 쿡덱스 서비스 이용 동의</Text>
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.legalScrollView}>
+              <Text style={styles.legalMainText}>AI 셰프 쿡덱스를 이용하기 전, 사용자의 안전을 위해 반드시 아래 내용을 확인해 주세요.</Text>
+              
+              <View style={styles.legalPointBox}>
+                <Text style={styles.legalPointTitle}>🥩 1. 조리 및 위생 주의</Text>
+                <Text style={styles.legalPointDesc}>AI가 제안하는 조리 시간과 온도는 대략적인 참고용입니다. 고기, 해산물 등은 반드시 본인의 판단하에 속까지 안전하게 완전히 익혀 드셔야 합니다.</Text>
+              </View>
+
+              <View style={styles.legalPointBox}>
+                <Text style={styles.legalPointTitle}>🥜 2. 알레르기 확인 의무</Text>
+                <Text style={styles.legalPointDesc}>생성된 레시피에 본인에게 치명적인 알레르기 유발 물질이 포함되어 있는지, 조리 전에 유저 스스로 직접 교차 검증해야 합니다.</Text>
+              </View>
+
+              <View style={styles.legalPointBox}>
+                <Text style={styles.legalPointTitle}>🤖 3. AI 할루시네이션(착각) 주의</Text>
+                <Text style={styles.legalPointDesc}>AI는 시각적으로 완벽하지 않으며, 가끔 먹을 수 없는 물건(예: 모형, 화학제품 등)을 식재료로 착각하여 요리를 제안할 수 있습니다. 비식재료는 절대 취식하지 마십시오.</Text>
+              </View>
+
+              <Text style={styles.legalFooterText}>※ 위 사항을 무시하여 발생한 취식 상의 문제 및 신체적 피해에 대하여 앱 개발자는 어떠한 법적 책임도 지지 않음을 명시합니다.</Text>
+            </ScrollView>
+
+            <TouchableOpacity style={styles.legalAgreeButton} onPress={handleAgreeLegal}>
+              <Text style={styles.legalAgreeButtonText}>위 모든 내용을 숙지하였으며, 동의합니다</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <KeyboardAvoidingView style={{flex: 1}} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, paddingBottom: keyboardHeight + 80 }} keyboardShouldPersistTaps="handled">
           
@@ -264,9 +336,15 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <TouchableOpacity style={styles.qaButton} onPress={refillQA}>
-            <Text style={styles.qaButtonText}>🛠️ QA 모드: 스캔 횟수 무한 충전</Text>
-          </TouchableOpacity>
+          <View style={{flexDirection: 'row', gap: 10, marginBottom: 20}}>
+            <TouchableOpacity style={[styles.qaButton, {flex: 1}]} onPress={refillQA}>
+              <Text style={styles.qaButtonText}>🛠️ QA 모드 (999회 충전)</Text>
+            </TouchableOpacity>
+            {/* 테스트를 위해 언제든 면책 팝업을 다시 띄워볼 수 있는 버튼 */}
+            <TouchableOpacity style={[styles.qaButton, {flex: 1, backgroundColor: '#5A4E49'}]} onPress={resetLegal}>
+              <Text style={styles.qaButtonText}>🔄 동의 기록 초기화</Text>
+            </TouchableOpacity>
+          </View>
 
           <ImageBackground source={{uri: 'https://images.unsplash.com/photo-1495195129352-aeb325a55b65?q=80&w=2076&auto=format&fit=crop'}} style={styles.banner} imageStyle={{ borderRadius: 20 }}>
             <View style={styles.bannerOverlay}>
@@ -275,27 +353,33 @@ export default function HomeScreen() {
             </View>
           </ImageBackground>
 
-          {/* 🚨 스캐너 위치 최상단 배치 */}
           <View style={styles.scanSection}>
             <View style={styles.scanInfoRow}>
               <Text style={styles.scanTitle}>📸 AI 식재료 스캐너</Text>
               <View style={styles.quotaBadge}>
-                <Text style={styles.quotaText}>오늘 남은 횟수: {scansLeft > 9000 ? '무제한' : scansLeft}</Text>
+                <Text style={styles.quotaText}>오늘 남은 횟수: {scansLeft > 900 ? '무제한(QA)' : scansLeft}</Text>
               </View>
             </View>
             <TouchableOpacity style={[styles.scanButton, scansLeft <= 0 && {backgroundColor: '#5A4E49'}]} onPress={handleScanPress} activeOpacity={0.8}>
-              <Text style={styles.scanButtonText}>{scansLeft > 0 ? '스캐너 켜기' : '내일 다시 시도해주세요'}</Text>
+              <Text style={styles.scanButtonText}>{scansLeft > 0 || scansLeft > 900 ? '스캐너 켜기' : '내일 다시 시도해주세요'}</Text>
             </TouchableOpacity>
           </View>
 
-          {/* 🚨 초기 모델의 풍부한 텍스트 기능 완벽 복구 */}
           <View style={styles.manualInputContainer} onLayout={(event) => setInputBoxY(event.nativeEvent.layout.y)}>
             <Text style={styles.manualInputTitle}>✏️ 재료 직접 입력 (무제한 무료)</Text>
-            
             <Text style={styles.sectionLabel}>자주 쓰는 재료 빠른 추가</Text>
-            <View style={styles.quickTagsContainer}>{COMMON_INGREDIENTS.filter(i => !selectedIngredients.includes(i)).map(ing => (<TouchableOpacity key={ing} style={styles.quickTag} onPress={() => toggleIngredient(ing)}><Text style={styles.quickTagText}>{ing} +</Text></TouchableOpacity>))}</View>
-            
-            {selectedIngredients.length > 0 && (<View style={styles.selectedTagsContainer}>{selectedIngredients.map((ing) => (<TouchableOpacity key={ing} style={styles.tagBadgeActive} onPress={() => toggleIngredient(ing)}><Text style={styles.tagTextActive}>{ing} ✕</Text></TouchableOpacity>))}</View>)}
+            <View style={styles.quickTagsContainer}>
+              {COMMON_INGREDIENTS.filter(i => !selectedIngredients.includes(i)).map(ing => (
+                <TouchableOpacity key={ing} style={styles.quickTag} onPress={() => toggleIngredient(ing)}><Text style={styles.quickTagText}>{ing} +</Text></TouchableOpacity>
+              ))}
+            </View>
+            {selectedIngredients.length > 0 && (
+              <View style={styles.selectedTagsContainer}>
+                {selectedIngredients.map((ing) => (
+                  <TouchableOpacity key={ing} style={styles.tagBadgeActive} onPress={() => toggleIngredient(ing)}><Text style={styles.tagTextActive}>{ing} ✕</Text></TouchableOpacity>
+                ))}
+              </View>
+            )}
 
             <Text style={[styles.sectionLabel, {marginTop: 10}]}>직접 검색 및 추가</Text>
             <View style={{flexDirection: 'row', gap: 10, marginBottom: 10}}>
@@ -303,15 +387,33 @@ export default function HomeScreen() {
               <TouchableOpacity style={styles.addBtn} onPress={addCustomIngredient}><Text style={{color:'#fff', fontWeight:'bold'}}>추가</Text></TouchableOpacity>
             </View>
             
-            {ingredientSearch.length > 0 && (<View style={styles.autocompleteContainer}>{filteredIngredients.length > 0 ? (filteredIngredients.slice(0, 5).map((ing) => (<TouchableOpacity key={ing} style={styles.tagBadge} onPress={() => toggleIngredient(ing)}><Text style={styles.tagText}>{ing} +</Text></TouchableOpacity>))) : (<TouchableOpacity style={styles.customAddBadge} onPress={addCustomIngredient}><Text style={styles.customAddText}>'{ingredientSearch}' 직접 추가 ➕</Text></TouchableOpacity>)}</View>)}
+            {ingredientSearch.length > 0 && (
+              <View style={styles.autocompleteContainer}>
+                {filteredIngredients.length > 0 ? (
+                  filteredIngredients.slice(0, 8).map((ing) => (<TouchableOpacity key={ing} style={styles.tagBadge} onPress={() => toggleIngredient(ing)}><Text style={styles.tagText}>{ing} +</Text></TouchableOpacity>))
+                ) : (
+                  <TouchableOpacity style={styles.customAddBadge} onPress={addCustomIngredient}><Text style={styles.customAddText}>'{ingredientSearch}' 직접 추가 ➕</Text></TouchableOpacity>
+                )}
+              </View>
+            )}
             
             <TouchableOpacity style={styles.manualSubmitBtn} onPress={() => getCurationThemes("")}><Text style={styles.manualSubmitText}>AI 텍스트 레시피 제작 ✨</Text></TouchableOpacity>
           </View>
 
+          <View style={styles.categorySection}>
+            <Text style={styles.categoryHeader}>💡 이런 상황엔 어때요?</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
+              <TouchableOpacity style={styles.categoryCard}><Text style={styles.categoryEmoji}>🏃‍♂️</Text><Text style={styles.categoryText}>바쁜 아침 10분컷</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.categoryCard}><Text style={styles.categoryEmoji}>🍻</Text><Text style={styles.categoryText}>퇴근 후 맥주 안주</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.categoryCard}><Text style={styles.categoryEmoji}>🥗</Text><Text style={styles.categoryText}>다이어트 식단</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.categoryCard}><Text style={styles.categoryEmoji}>🤧</Text><Text style={styles.categoryText}>감기 기운 있을 때</Text></TouchableOpacity>
+            </ScrollView>
+          </View>
+          
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* 🚨 텍스트 레시피 전용 바텀 모달 스튜디오 */}
+      {/* 바텀 모달 스튜디오 */}
       <Modal visible={showBottomModal} transparent={true} animationType="slide" onRequestClose={handleCloseModal}>
         <View style={styles.modalOverlay}>
           <View style={styles.bottomSheetContainer}>
@@ -427,8 +529,8 @@ const styles = StyleSheet.create({
   levelText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
   expText: { color: '#FFB347', fontSize: 12, fontWeight: 'bold' },
   
-  qaButton: { backgroundColor: '#8E24AA', padding: 12, borderRadius: 10, alignItems: 'center', marginBottom: 25 },
-  qaButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+  qaButton: { backgroundColor: '#4A3F3A', padding: 12, borderRadius: 10, alignItems: 'center' },
+  qaButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 13 },
 
   banner: { width: '100%', height: 160, borderRadius: 20, marginBottom: 25, overflow: 'hidden' },
   bannerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
@@ -443,25 +545,27 @@ const styles = StyleSheet.create({
   scanButton: { backgroundColor: '#FF8C00', paddingVertical: 18, borderRadius: 15, alignItems: 'center', shadowColor: '#FF8C00', shadowOffset: {width:0, height:4}, shadowOpacity: 0.3, shadowRadius: 5, elevation: 5 },
   scanButtonText: { color: '#fff', fontSize: 18, fontWeight: '900' },
 
-  manualInputContainer: { backgroundColor: '#3A322F', borderRadius: 20, padding: 20, marginBottom: 30, borderWidth: 1, borderColor: '#4A3F3A' },
+  manualInputContainer: { backgroundColor: '#3A322F', borderRadius: 20, padding: 20, marginBottom: 30, borderWidth: 1, borderColor: '#4A3F3A', shadowColor: '#000', shadowOffset: {width:0, height:2}, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
   manualInputTitle: { fontSize: 18, fontWeight: 'bold', color: '#FFFDF9', marginBottom: 15 }, 
-  sectionLabel: { fontSize: 13, fontWeight: 'bold', color: '#A89F9C', marginBottom: 8 }, 
-  quickTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 15 }, 
-  quickTag: { backgroundColor: '#4A3F3A', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, borderColor: '#5A4E49' }, 
-  quickTagText: { color: '#E8D5D0', fontSize: 12, fontWeight: 'bold' }, 
-  selectedTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12, marginTop: 5 }, 
-  manualInputBox: { flex: 1, backgroundColor: '#4A3F3A', color: '#FFFDF9', paddingHorizontal: 15, paddingVertical: 14, borderRadius: 12, fontSize: 14, borderWidth: 1, borderColor: '#5A4E49' }, 
-  addBtn: { backgroundColor: '#5A4E49', paddingHorizontal: 20, justifyContent: 'center', alignItems: 'center', borderRadius: 12 },
-  autocompleteContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15, padding: 10, backgroundColor: '#4A3F3A', borderRadius: 10 }, 
-  tagBadge: { paddingVertical: 8, paddingHorizontal: 14, backgroundColor: '#5A4E49', borderRadius: 20, borderWidth: 1, borderColor: '#8C7A76' }, 
-  tagBadgeActive: { paddingVertical: 8, paddingHorizontal: 14, backgroundColor: '#FF8C00', borderRadius: 20 }, 
-  tagText: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold' }, 
-  tagTextActive: { color: '#fff', fontSize: 13, fontWeight: 'bold' }, 
-  customAddBadge: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: '#FF8C00', borderRadius: 10, width: '100%', alignItems: 'center' }, 
-  customAddText: { color: '#fff', fontSize: 14, fontWeight: 'bold' }, 
-  manualSubmitBtn: { backgroundColor: '#4CAF50', paddingVertical: 16, borderRadius: 12, alignItems: 'center', shadowColor: '#4CAF50', shadowOpacity: 0.3, shadowRadius: 5, elevation: 3, marginTop: 5 }, 
-  manualSubmitText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }, 
-
+  sectionLabel: { fontSize: 13, fontWeight: 'bold', color: '#A89F9C', marginBottom: 8 },
+  quickTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 15 },
+  quickTag: { backgroundColor: '#4A3F3A', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, borderColor: '#5A4E49' },
+  quickTagText: { color: '#E8D5D0', fontSize: 12, fontWeight: 'bold' },
+  selectedTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 },
+  tagBadgeActive: { paddingVertical: 8, paddingHorizontal: 14, backgroundColor: '#FF8C00', borderRadius: 20 },
+  tagTextActive: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
+  inlineInputRow: { flexDirection: 'row', gap: 10, marginBottom: 10, alignItems: 'center' },
+  manualInputBox: { flex: 1, backgroundColor: '#4A3F3A', borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: '#FFFDF9', borderWidth: 1, borderColor: '#5A4E49' },
+  addBtn: { backgroundColor: '#5A4E49', paddingHorizontal: 20, paddingVertical: 14, justifyContent: 'center', alignItems: 'center', borderRadius: 14 },
+  addBtnText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  autocompleteContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15, padding: 10, backgroundColor: '#4A3F3A', borderRadius: 10 },
+  tagBadge: { paddingVertical: 8, paddingHorizontal: 14, backgroundColor: '#5A4E49', borderRadius: 20, borderWidth: 1, borderColor: '#8C7A76' },
+  tagText: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold' },
+  customAddBadge: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: '#FF8C00', borderRadius: 10, borderWidth: 1, borderColor: '#FFB74D', width: '100%', alignItems: 'center' },
+  customAddText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  manualSubmitBtn: { backgroundColor: '#4CAF50', paddingVertical: 16, alignItems: 'center', borderRadius: 14, marginTop: 10 },
+  manualSubmitText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  
   categorySection: { marginBottom: 20 },
   categoryHeader: { fontSize: 18, fontWeight: 'bold', color: '#FFFDF9', marginBottom: 15 },
   categoryScroll: { gap: 12 },
@@ -471,7 +575,8 @@ const styles = StyleSheet.create({
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' }, 
   modalOverlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 20 },
-  bottomSheetContainer: { height: '88%', backgroundColor: '#FFFDF9', borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingHorizontal: 20, paddingBottom: 20 }, 
+  bottomSheetContainer: { height: '88%', backgroundColor: '#FFFDF9', borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingHorizontal: 20, paddingBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -5 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 10 }, 
+  bottomSheetContainerWrapper: { width: '100%', justifyContent: 'flex-end' }, 
   dragHandle: { width: 50, height: 5, backgroundColor: '#E8D5D0', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 15 }, 
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#E8D5D0', marginBottom: 15 }, 
   modalTitleText: { fontSize: 18, color: '#3A2E2B', fontWeight: '900' }, 
@@ -492,5 +597,18 @@ const styles = StyleSheet.create({
   
   ttsStartBtn: { backgroundColor: '#E3F2FD', paddingVertical: 15, borderRadius: 15, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#CE93D8' }, ttsStartBtnText: { color: '#8E24AA', fontSize: 15, fontWeight: '900' }, ttsContainer: { flex: 1, backgroundColor: '#2A2421', padding: 20, justifyContent: 'space-between' }, ttsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 }, ttsStepIndicator: { color: '#FFB347', fontSize: 18, fontWeight: 'bold' }, ttsCloseBtn: { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 20 }, ttsCloseBtnText: { color: '#fff', fontWeight: 'bold' }, ttsBody: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10 }, ttsBigText: { color: '#FFFDF9', fontSize: 32, fontWeight: '900', textAlign: 'center', lineHeight: 45 }, ttsControls: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 }, ttsBtn: { backgroundColor: '#4A3F3A', paddingVertical: 20, flex: 1, borderRadius: 20, alignItems: 'center', marginHorizontal: 5 }, ttsBtnText: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold' }, ttsBtnMain: { backgroundColor: '#FF8C00', paddingVertical: 25, flex: 1.5, borderRadius: 25, alignItems: 'center', marginHorizontal: 5, shadowColor: '#FF8C00', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 }, ttsBtnMainText: { color: '#fff', fontSize: 18, fontWeight: '900' },
   
-  styleModalTitle: { color: '#8E24AA', fontSize: 20, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' }, styleInputLabel: { color: '#3A2E2B', fontSize: 14, fontWeight: 'bold', marginBottom: 8, marginTop: 10 }, styleTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5 }, styleTag: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: '#F9F5F3', borderRadius: 20, borderWidth: 1, borderColor: '#E8D5D0' }, styleTagActive: { backgroundColor: '#8E24AA', borderColor: '#AB47BC' }, styleTagText: { color: '#8C7A76', fontSize: 13, fontWeight: 'bold' }, styleTagTextActive: { color: '#fff', fontSize: 13, fontWeight: 'bold' }, customTextInput: { backgroundColor: '#FFFDF9', color: '#3A2E2B', paddingHorizontal: 15, paddingVertical: 12, borderRadius: 10, fontSize: 14, borderWidth: 1, borderColor: '#8E24AA', marginTop: 10 }, styleModalButtons: { flexDirection: 'row', justifyContent: 'center', gap: 15, width: '100%', marginTop: 25 }, styleModalCancel: { backgroundColor: '#F5EBE7', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flex: 1 }, styleModalSave: { backgroundColor: '#8E24AA', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flex: 1.5 }, styleModalBtnText: { color: '#8C7A76', fontWeight: 'bold', fontSize: 15, textAlign: 'center' }, styleModalBtnTextWhite: { color: '#fff', fontWeight: 'bold', fontSize: 15, textAlign: 'center' }
+  styleModalTitle: { color: '#8E24AA', fontSize: 20, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' }, styleInputLabel: { color: '#3A2E2B', fontSize: 14, fontWeight: 'bold', marginBottom: 8, marginTop: 10 }, styleTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5 }, styleTag: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: '#F9F5F3', borderRadius: 20, borderWidth: 1, borderColor: '#E8D5D0' }, styleTagActive: { backgroundColor: '#8E24AA', borderColor: '#AB47BC' }, styleTagText: { color: '#8C7A76', fontSize: 13, fontWeight: 'bold' }, styleTagTextActive: { color: '#fff', fontSize: 13, fontWeight: 'bold' }, customTextInput: { backgroundColor: '#FFFDF9', color: '#3A2E2B', paddingHorizontal: 15, paddingVertical: 12, borderRadius: 10, fontSize: 14, borderWidth: 1, borderColor: '#8E24AA', marginTop: 10 }, styleModalButtons: { flexDirection: 'row', justifyContent: 'center', gap: 15, width: '100%', marginTop: 25 }, styleModalCancel: { backgroundColor: '#F5EBE7', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flex: 1 }, styleModalSave: { backgroundColor: '#8E24AA', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flex: 1.5 }, styleModalBtnText: { color: '#8C7A76', fontWeight: 'bold', fontSize: 15, textAlign: 'center' }, styleModalBtnTextWhite: { color: '#fff', fontWeight: 'bold', fontSize: 15, textAlign: 'center' },
+
+  // 🚨 [신규 추가] 법적 면책 팝업 전용 스타일
+  legalModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  legalModalContent: { width: '100%', maxHeight: '85%', backgroundColor: '#FFFDF9', borderRadius: 24, padding: 25, shadowColor: '#000', shadowOffset: {width:0, height:10}, shadowOpacity: 0.3, shadowRadius: 20, elevation: 15 },
+  legalModalTitle: { fontSize: 22, fontWeight: '900', color: '#D32F2F', textAlign: 'center', marginBottom: 20 },
+  legalScrollView: { marginBottom: 20 },
+  legalMainText: { fontSize: 15, color: '#3A2E2B', fontWeight: 'bold', marginBottom: 20, textAlign: 'center', lineHeight: 22 },
+  legalPointBox: { backgroundColor: '#FFEBEE', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#FFCDD2' },
+  legalPointTitle: { fontSize: 16, fontWeight: '900', color: '#C62828', marginBottom: 6 },
+  legalPointDesc: { fontSize: 14, color: '#3A2E2B', lineHeight: 20 },
+  legalFooterText: { fontSize: 12, color: '#8C7A76', textAlign: 'center', marginTop: 10, fontWeight: 'bold' },
+  legalAgreeButton: { backgroundColor: '#4CAF50', paddingVertical: 18, borderRadius: 16, alignItems: 'center', shadowColor: '#4CAF50', shadowOpacity: 0.4, shadowRadius: 8, elevation: 5 },
+  legalAgreeButtonText: { color: '#fff', fontSize: 16, fontWeight: '900' }
 });

@@ -10,7 +10,7 @@ import { ActivityIndicator, Alert, Dimensions, Image, Keyboard, KeyboardAvoiding
 import Markdown from 'react-native-markdown-display';
 import { auth, db } from '../firebaseConfig';
 
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || "AIzaSyBIjimRGdi7uNlx3xh7WgeDgAhdY5wO-EQ";
+const GEMINI_API_KEY = "AIzaSyAtNaFznILlzaB0xwqWoyOaGUdZSClEhyk";
 const RECIPE_TYPES = ["메인 디쉬 🍛", "디저트 🍰", "음료/칵테일 🍹", "간단한 간식 🍟", "술안주 🍻", "샐러드/다이어트 🥗"];
 const RECIPE_TASTES = ["매콤한 🔥", "단짠단짠 🍯🧂", "짭짤한 🧂", "자극적인 속세의 맛 😈", "담백하고 건강한 🌿", "따뜻한 국물 🍲"];
 const COMMON_INGREDIENTS = ["감자", "고구마", "양파", "대파", "마늘", "돼지고기", "소고기", "닭고기", "생선", "계란", "두부", "김치", "스팸", "소면", "치즈", "우유"];
@@ -27,9 +27,9 @@ const extractJSON = (rawText) => {
   } catch (e) { return null; }
 };
 
-// 🚨 구형 모델 돌려막기 완전 폐기. 오직 1.5 라인업 2개만 타격!
+// 🚨 [이슈 2 해결] 쓸데없는 루프를 버리고, 빠르고 정확한 단일 스위칭으로 개편
 const callGeminiAPI = async (systemPrompt, imageParts = []) => {
-  const modelsToTry = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-pro'];
   let lastError = null;
 
   for (const model of modelsToTry) {
@@ -47,7 +47,8 @@ const callGeminiAPI = async (systemPrompt, imageParts = []) => {
 
       if (!response.ok) {
         lastError = new Error(`[${response.status}] ${model}: ${data.error?.message || '통신 에러'}`);
-        continue; // 404나 403이 나면 앱을 죽이지 않고 다음 1.5-pro 로 조용히 우회
+        if (response.status === 404 || response.status === 403) continue; // 권한 없으면 뻗지말고 다음 모델 시도
+        throw lastError;
       }
 
       if (!data.candidates || data.candidates.length === 0) throw new Error("API_EMPTY");
@@ -59,10 +60,11 @@ const callGeminiAPI = async (systemPrompt, imageParts = []) => {
       return JSON.parse(rawText.replace(/```json/g, '').replace(/```/g, ''));
     } catch (error) {
       lastError = error;
-      continue;
+      if (error.message && error.message.includes('404')) continue;
+      throw error;
     }
   }
-  throw lastError; // flash와 pro 둘 다 막혔을 때만 에러 표출
+  throw lastError; 
 };
 
 export default function ScannerScreen() {
@@ -111,7 +113,7 @@ export default function ScannerScreen() {
     const showSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => setKeyboardHeight(e.endCoordinates.height));
     const hideSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardHeight(0));
     
-    // 일일 스캔 횟수 차감 처리 (QA 모드면 안 깎임)
+    // 일일 스캔 횟수 차감 처리 (스캐너 화면 진입 시)
     const deductScanCount = async () => {
       try {
         const limitStr = await AsyncStorage.getItem('cookdex_daily_scans');
@@ -126,8 +128,8 @@ export default function ScannerScreen() {
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
 
-  if (!permission) return <View />;
-  if (!permission.granted) return (<View style={styles.container}><TouchableOpacity style={styles.analyzeButton} onPress={requestPermission}><Text style={styles.buttonText}>권한 허용</Text></TouchableOpacity></View>);
+  if (!permission) return <View style={styles.container}/>;
+  if (!permission.granted) return (<View style={styles.container}><TouchableOpacity style={styles.analyzeButton} onPress={requestPermission}><Text style={styles.buttonText}>카메라 권한 허용</Text></TouchableOpacity></View>);
 
   const takePicture = async () => {
     if (cameraRef.current) {
@@ -159,11 +161,10 @@ export default function ScannerScreen() {
     else Alert.alert("알림", "재료를 추가하거나 사진을 찍어주세요.");
   };
 
-  const generateFromTextOnly = async (customStyleStr = "", forcedIngredients = null) => {
+  const generateFromTextOnly = async (customStyleStr = "") => {
     setAppStep('result'); setIsAnalyzing(true); setIsCurating(true); setShowStyleModal(false); setCurationThemes(null); setRecipeResult(null); setShoppingList([]);
     try {
-      const targetIngredients = forcedIngredients || manualIngredients;
-      const allIngredients = [...new Set([...currentIngredients, ...targetIngredients])]; 
+      const allIngredients = [...new Set([...currentIngredients, ...manualIngredients])]; 
       const systemPrompt = `너는 최고의 셰프 '쿡덱스'야. 유저가 기입한 [식재료: ${allIngredients.join(', ')}] 만을 사용하여 3가지 요리 테마를 제안해.
       ${customStyleStr ? `[목표 스타일]: ${customStyleStr}` : ''}
       오직 아래 JSON 스키마를 100% 준수해서 응답해.
@@ -173,7 +174,7 @@ export default function ScannerScreen() {
       setCurrentIngredients(parsedData.detected_ingredients || allIngredients);
       setCurationThemes(parsedData.curation_themes.slice(0, 3));
     } catch (error) {
-      Alert.alert("🚨 구글 통신 에러", `API 권한 문제이거나 서버 오류입니다.\n\n상세: ${error.message}`);
+      Alert.alert("🚨 구글 통신 에러", `API 키 문제이거나 서버 오류입니다.\n\n상세: ${error.message}`);
       setAppStep('camera');
     } finally { setIsAnalyzing(false); setIsCurating(false); }
   };
@@ -200,13 +201,14 @@ export default function ScannerScreen() {
       setCurationThemes(parsedData.curation_themes.slice(0, 3));
       setIsCurating(false); setIsAnalyzing(false);
     } catch (error) { 
-      if (error.message.includes("429") || error.message.includes("API 키")) {
-        Alert.alert("🚨 통신 거절됨", `구글 서버에서 요청을 거절했습니다.\n\n원인: ${error.message}`);
+      // API Key 문제면 플랜 B 없이 즉시 배출 (결번 에러 방지용)
+      if (error.message.includes("429") || error.message.includes("API 키") || error.message.includes("404")) {
+        Alert.alert("🚨 구글 API 거절됨", `현재 사용 중인 API 키에 권한이 없거나 한도를 초과했습니다.\n\n원인: ${error.message}`);
         setAppStep('camera'); setIsCurating(false); setIsAnalyzing(false);
         return;
       }
 
-      // 🚨 플랜 B 작동
+      // 🚨 플랜 B 작동 (안전 필터 등에 걸렸을 때)
       if (manualIngredients.length > 0) {
         Alert.alert(
           "⚠️ 사진 인식 불가 (플랜 B 가동)", 
@@ -467,6 +469,8 @@ export default function ScannerScreen() {
     <View style={styles.container}>
       <CameraView style={styles.camera} facing="back" ref={cameraRef}>
         
+        {/* QA 모드 뱃지 삭제됨 */}
+
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}><Text style={styles.backButtonText}>✕</Text></TouchableOpacity>
         
         <View style={styles.topHUDContainer}>
