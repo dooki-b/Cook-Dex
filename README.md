@@ -1,50 +1,51 @@
-# Welcome to your Expo app 👋
+# Cook-Dex 🍳
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+AI 기반 냉장고 파먹기 & 레시피 추천 앱입니다.
 
-## Get started
+## 👋 팀원 가이드 (Getting Started)
 
-1. Install dependencies
+이 프로젝트는 **Docker** 환경에서 실행되도록 설정되어 있습니다.
+아래 순서대로 따라하면 복잡한 환경 설정 없이 바로 개발을 시작할 수 있습니다!
+
+### 1. 필수 준비물
+
+- **Docker Desktop**: 다운로드 링크 (설치 후 실행 필수)
+- **Expo Go 앱**: 본인의 스마트폰에 설치 (App Store / Play Store)
+- **Git**: 소스 코드 다운로드용
+
+### 2. 프로젝트 세팅
+
+1. **프로젝트 클론 (Clone)**
 
    ```bash
-   npm install
+   git clone [레포지토리_URL]
+   cd Cook-Dex
    ```
 
-2. Start the app
+2. **환경 변수 설정 (.env) 🔑**
+   - 보안을 위해 API 키는 코드에 포함되지 않습니다.
+   - 프로젝트 루트에 `.env` 파일을 새로 생성하세요.
+   - `.env.template` 파일의 내용을 복사해서 붙여넣고, **공유받은 실제 키 값**을 채워넣으세요.
 
-   ```bash
-   npx expo start
-   ```
+### 3. 앱 실행하기 (Docker)
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+터미널에서 아래 명령어를 입력하세요. (패키지 설치부터 실행까지 자동으로 진행됩니다.)
 
 ```bash
-npm run reset-project
+docker-compose up --build
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+- **QR 코드 스캔**: 실행 후 터미널에 QR 코드가 나오면 **Expo Go** 앱으로 스캔하세요.
+- **Tunnel 모드**: `--tunnel` 옵션이 켜져 있어, PC와 폰이 같은 와이파이가 아니더라도 접속 가능합니다.
 
-## Learn more
+### 4. 자주 묻는 질문 (FAQ)
 
-To learn more about developing your project with Expo, look at the following resources:
+- **Q: 패키지(라이브러리)를 새로 추가했어요.**
+  - A: `package.json`이 변경되었다면 컨테이너를 다시 빌드해야 합니다. `docker-compose up --build`를 다시 실행해주세요.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+- **Q: QR 코드가 안 보여요.**
+  - A: 터미널 창을 클릭하고 키보드 `s`를 눌러보세요. 혹은 로그에 찍힌 `exp://...` 주소를 복사해 앱에 직접 입력하세요.
 
-## Join the community
+---
 
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Happy Coding! 👨‍🍳
