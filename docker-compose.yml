@@ -1,0 +1,29 @@
+services:
+  cook-dex-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cook-dex-container
+    ports:
+      - "8081:8081" # Metro Bundler 포트
+    volumes:
+      - .:/app # 호스트의 코드를 컨테이너와 동기화 (Hot Reloading)
+      - /app/node_modules # 컨테이너 내부의 node_modules를 우선 사용
+    environment:
+      # .env 파일에 있는 API 키를 Docker 내부로 전달
+      - EXPO_PUBLIC_GEMINI_API_KEY=${EXPO_PUBLIC_GEMINI_API_KEY}
+      - EXPO_PUBLIC_FIREBASE_API_KEY=${EXPO_PUBLIC_FIREBASE_API_KEY}
+      - EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=${EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN}
+      - EXPO_PUBLIC_FIREBASE_PROJECT_ID=${EXPO_PUBLIC_FIREBASE_PROJECT_ID}
+      - EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET=${EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET}
+      - EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=${EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID}
+      - EXPO_PUBLIC_FIREBASE_APP_ID=${EXPO_PUBLIC_FIREBASE_APP_ID}
+      - REACT_NATIVE_PACKAGER_HOSTNAME=0.0.0.0
+    stdin_open: true # 인터랙티브 모드 활성화
+    tty: true
+    networks:
+      - cook-dex-net
+
+networks:
+  cook-dex-net:
+    driver: bridge
