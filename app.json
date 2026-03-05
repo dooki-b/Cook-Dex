@@ -2,10 +2,11 @@
   "expo": {
     "name": "cook-dex",
     "slug": "cook-dex",
+    "scheme": "cook-dex",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/images/splash.png",
       "resizeMode": "contain",
@@ -18,6 +19,9 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#FFB347"
+      },
+      "androidNavigationBar": {
+        "backgroundColor": "#000000"
       },
       "package": "com.cookdex.app",
       "permissions": [

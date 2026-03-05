@@ -11,6 +11,7 @@ export default function RootLayout() {
   const [user, setUser] = useState(null);
   const router = useRouter();
   const segments = useSegments();
+  const [isTutorialReady, setIsTutorialReady] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -40,12 +41,31 @@ export default function RootLayout() {
       router.replace('/login');
     } 
     // 🚨 치명적 에러 해결: 스캐너(scanner) 화면일 때는 홈으로 튕겨내지 않도록 예외 처리 추가!!
-    else if (user && segments[0] !== '(tabs)' && segments[0] !== 'scanner') {
+    else if (user && segments[0] !== '(tabs)' && segments[0] !== 'scanner' && segments[0] !== 'create-recipe' && segments[0] !== 'tutorial') {
       router.replace('/(tabs)');
     }
   }, [user, isInitializing, segments]);
 
-  if (isInitializing) {
+  useEffect(() => {
+    const checkTutorialAgreed = async () => {
+      try {
+        const hasAgreed = await AsyncStorage.getItem('cookdex_has_agreed');
+        
+        // 동의하지 않았고, 현재 튜토리얼 화면이 아니라면 강제 이동
+        if (hasAgreed !== 'true' && segments[0] !== 'tutorial') {
+          router.replace('/tutorial');
+        }
+      } catch (error) {
+        console.error("튜토리얼 상태 확인 오류:", error);
+      } finally {
+        setIsTutorialReady(true);
+      }
+    };
+
+    checkTutorialAgreed();
+  }, [segments]);
+
+  if (isInitializing || !isTutorialReady) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#FF8C00" />
@@ -58,6 +78,7 @@ export default function RootLayout() {
       <Stack.Screen name="login" options={{ gestureEnabled: false }} />
       <Stack.Screen name="(tabs)" options={{ gestureEnabled: false }} />
       <Stack.Screen name="scanner" />
+      <Stack.Screen name="tutorial" options={{ headerShown: false, gestureEnabled: false }} />
     </Stack>
   );
 }

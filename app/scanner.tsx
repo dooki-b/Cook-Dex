@@ -2,18 +2,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Speech from 'expo-speech';
 import { addDoc, collection, doc, increment, setDoc } from 'firebase/firestore';
-import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Dimensions, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db } from '../firebaseConfig';
 
-const GEMINI_API_KEY = "AIzaSyAtNaFznILlzaB0xwqWoyOaGUdZSClEhyk";
+const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
 const RECIPE_TYPES = ["메인 디쉬 🍛", "디저트 🍰", "음료/칵테일 🍹", "간단한 간식 🍟", "술안주 🍻", "샐러드/다이어트 🥗"];
 const RECIPE_TASTES = ["매콤한 🔥", "단짠단짠 🍯🧂", "짭짤한 🧂", "자극적인 속세의 맛 😈", "담백하고 건강한 🌿", "따뜻한 국물 🍲"];
-const COMMON_INGREDIENTS = ["감자", "고구마", "양파", "대파", "마늘", "돼지고기", "소고기", "닭고기", "생선", "계란", "두부", "김치", "스팸", "소면", "치즈", "우유"];
+const COMMON_INGREDIENTS = ["감자", "고구마", "양파", "대파", "마늘", "돼지고기", "소고기", "닭고기", "생선", "계란", "두부", "김치", "통조림 햄", "소면", "치즈", "우유"];
 const LABEL_CATEGORIES = ["🥬 채소", "🍎 과일", "🥩 육류", "🐟 해산물", "🍞 빵/곡물", "🥛 유제품", "🥫 가공품", "🧂 소스류"];
 
 const windowHeight = Dimensions.get('window').height;
@@ -71,6 +72,14 @@ export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
   const router = useRouter();
+  const params = useLocalSearchParams();
+
+  // 🚨 [신규] 일일 스캔 제한 및 광고 상태
+  const DAILY_SCAN_LIMIT = 3;
+  const [scansLeft, setScansLeft] = useState(DAILY_SCAN_LIMIT);
+  const [adPromptVisible, setAdPromptVisible] = useState(false);
+  const [mockAdPlaying, setMockAdPlaying] = useState(false);
+  const [adCountdown, setAdCountdown] = useState(3);
 
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
@@ -104,29 +113,88 @@ export default function ScannerScreen() {
 
   const [showTrainingModal, setShowTrainingModal] = useState(false);
   const [selectedPhotoForTraining, setSelectedPhotoForTraining] = useState(null);
-  const [aiCandidates, setAiCandidates] = useState([]);
-  const [isFetchingCandidates, setIsFetchingCandidates] = useState(false);
   const [trainingInput, setTrainingInput] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("");
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(null);
+
+  // 🚨 [신규] 희망 요리 스타일 사전 질문 상태
+  const [styleModalVisible, setStyleModalVisible] = useState(false);
+  const [preferredStyle, setPreferredStyle] = useState("");
 
   useEffect(() => {
     const showSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => setKeyboardHeight(e.endCoordinates.height));
     const hideSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardHeight(0));
     
-    // 일일 스캔 횟수 차감 처리 (스캐너 화면 진입 시)
-    const deductScanCount = async () => {
-      try {
-        const limitStr = await AsyncStorage.getItem('cookdex_daily_scans');
-        if (limitStr !== '-9999') {
-          const current = limitStr ? parseInt(limitStr) : 0;
-          await AsyncStorage.setItem('cookdex_daily_scans', (current + 1).toString());
-        }
-      } catch(e) {}
-    };
-    deductScanCount();
-
     return () => { showSub.remove(); hideSub.remove(); };
   }, []);
+
+  // 🚨 [신규] 외부(create-recipe)에서 텍스트 입력으로 넘어왔을 때 처리
+  useEffect(() => {
+    if (params.manualInput) {
+      const inputStr = Array.isArray(params.manualInput) ? params.manualInput[0] : params.manualInput;
+      if (inputStr) {
+        const newIngredients = inputStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+        
+        if (newIngredients.length > 0) { 
+          setManualIngredients(prev => [...new Set([...prev, ...newIngredients])]);
+          setStyleModalVisible(true);
+        }
+      }
+    }
+  }, [params.manualInput]);
+
+  // 🚨 [신규] 일일 스캔 횟수 로드
+  useFocusEffect(
+    useCallback(() => {
+      const loadDailyScans = async () => {
+        try {
+          const today = new Date().toLocaleDateString();
+          const limitDataRaw = await AsyncStorage.getItem('cookdex_daily_scans');
+          if (limitDataRaw) {
+            const limitData = JSON.parse(limitDataRaw);
+            if (limitData.date === today) {
+              setScansLeft(limitData.count);
+            } else {
+              setScansLeft(DAILY_SCAN_LIMIT);
+              await AsyncStorage.setItem('cookdex_daily_scans', JSON.stringify({ date: today, count: DAILY_SCAN_LIMIT }));
+            }
+          } else {
+            await AsyncStorage.setItem('cookdex_daily_scans', JSON.stringify({ date: today, count: DAILY_SCAN_LIMIT }));
+          }
+        } catch (error) {}
+      };
+      loadDailyScans();
+    }, [])
+  );
+
+  // 🚨 [신규] 스캔 제한 검사 래퍼
+  const checkLimitAndRun = (actionFunc) => {
+    if (scansLeft > 0) {
+      actionFunc();
+    } else {
+      setAdPromptVisible(true);
+    }
+  };
+
+  // 🚨 [신규] 가상 광고 재생 및 충전
+  const playMockAd = () => {
+    setAdPromptVisible(false);
+    setMockAdPlaying(true);
+    let timeLeft = 3;
+    setAdCountdown(timeLeft);
+    
+    const timer = setInterval(async () => {
+      timeLeft -= 1;
+      setAdCountdown(timeLeft);
+      if (timeLeft <= 0) {
+        clearInterval(timer);
+        setMockAdPlaying(false);
+        const newCount = scansLeft + 1;
+        setScansLeft(newCount);
+        await AsyncStorage.setItem('cookdex_daily_scans', JSON.stringify({ date: new Date().toLocaleDateString(), count: newCount }));
+        Alert.alert("보상 획득! 🎁", "스캔 횟수가 1회 충전되었습니다! 바로 스캔을 진행해주세요.");
+      }
+    }, 1000);
+  };
 
   if (!permission) return <View style={styles.container}/>;
   if (!permission.granted) return (<View style={styles.container}><TouchableOpacity style={styles.analyzeButton} onPress={requestPermission}><Text style={styles.buttonText}>카메라 권한 허용</Text></TouchableOpacity></View>);
@@ -135,7 +203,7 @@ export default function ScannerScreen() {
     if (cameraRef.current) {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
       const manipResult = await manipulateAsync(photo.uri, [{ resize: { width: 800 } }], { compress: 0.7, format: SaveFormat.JPEG, base64: true });
-      setPhotos(prev => [...prev, manipResult]);
+      setPhotos(prev => [...prev, { ...manipResult, label: "" }]);
     }
   };
 
@@ -156,21 +224,59 @@ export default function ScannerScreen() {
   const filteredManualIngredients = COMMON_INGREDIENTS.filter(i => i.includes(manualInputText) && !manualIngredients.includes(i));
 
   const handleRecipeGeneration = () => {
-    if (photos.length > 0) generateFromImage();
-    else if (manualIngredients.length > 0) generateFromTextOnly("");
-    else Alert.alert("알림", "재료를 추가하거나 사진을 찍어주세요.");
+    // 🚨 [방어 로직] 식재료 이름(Label) 검증
+    if (photos.some(p => !p.label || p.label.trim() === "")) {
+      Alert.alert("식재료로 인식되지 못함", "이름이 없는 사진이 있습니다. 사진을 눌러 정확한 식재료 이름을 기입해주세요.");
+      return;
+    }
+
+    if (photos.length > 0 || manualIngredients.length > 0) {
+      setPreferredStyle(""); // 스타일 초기화
+      setStyleModalVisible(true); // 모달 띄우기
+    } else {
+      Alert.alert("알림", "재료를 추가하거나 사진을 찍어주세요.");
+    }
+  };
+
+  const confirmStyleAndGenerate = (style) => {
+    setStyleModalVisible(false);
+    if (photos.length > 0) generateFromImage(style);
+    else if (manualIngredients.length > 0) generateFromTextOnly(style);
   };
 
   const generateFromTextOnly = async (customStyleStr = "") => {
     setAppStep('result'); setIsAnalyzing(true); setIsCurating(true); setShowStyleModal(false); setCurationThemes(null); setRecipeResult(null); setShoppingList([]);
     try {
+      // --- [유저 맞춤 설정 불러오기] ---
+      const savedDietRaw = await AsyncStorage.getItem('cookdex_diet_goal');
+      let savedDiet = [];
+      try { savedDiet = savedDietRaw ? JSON.parse(savedDietRaw) : []; } catch (e) { savedDiet = savedDietRaw && savedDietRaw !== "없음" ? [savedDietRaw] : []; }
+      const savedAllergies = await AsyncStorage.getItem('cookdex_allergies');
+      const savedCondimentsRaw = await AsyncStorage.getItem('cookdex_condiments');
+      
+      const dietText = savedDiet.length > 0 ? `[식단 목표: ${savedDiet.join(', ')}]에 맞춰서 요리해 줘.` : "";
+      const allergyText = savedAllergies && savedAllergies !== "없음" ? `[🚨치명적 경고🚨 알레르기 및 기피 재료: ${savedAllergies}] 이 재료들은 레시피에 절대 포함시키지 마!` : "";
+      const condimentsText = savedCondimentsRaw ? `[보유 중인 기본 양념/향신료: ${JSON.parse(savedCondimentsRaw).join(', ')}] 이 재료들은 이미 집에 있으니 '부족한 구매 리스트'에서 빼고 자유롭게 써 줘.` : "";
+
+      const userContextPrompt = `\n\n--- 👨‍🍳 셰프 맞춤 설정 ---\n${dietText}\n${allergyText}\n${condimentsText}\n----------------------\n`;
+      // ---------------------------------
       const allIngredients = [...new Set([...currentIngredients, ...manualIngredients])]; 
-      const systemPrompt = `너는 최고의 셰프 '쿡덱스'야. 유저가 기입한 [식재료: ${allIngredients.join(', ')}] 만을 사용하여 3가지 요리 테마를 제안해.
-      ${customStyleStr ? `[목표 스타일]: ${customStyleStr}` : ''}
+      const systemPrompt = `너는 최고의 셰프 '쿡덱스'야. 유저가 기입한 [식재료: ${allIngredients.join(', ')}] 만을 사용하여 3가지 요리 테마를 제안해.${userContextPrompt}
+      ${customStyleStr ? `[희망 요리 스타일: ${customStyleStr}]` : ''}
+      
+      ⚠️ 중요: 입력된 재료 중 '먹을 수 없는 것(비식재료, 예: 물티슈, 세제, 가구 등)'이 있다면 반드시 "invalid_items" 배열에 포함시켜.
+
       오직 아래 JSON 스키마를 100% 준수해서 응답해.
-      { "detected_ingredients": ["${allIngredients.join('", "')}"], "curation_themes": [ { "theme_title": "요리 이름", "match_reason": "추천 이유", "badge_icon": "이모지", "ui_accent_color": "#FF8C00" } ] }`;
+      { "invalid_items": ["식재료가 아닌 것"], "detected_ingredients": ["${allIngredients.join('", "')}"], "curation_themes": [ { "theme_title": "요리 이름", "match_reason": "추천 이유", "badge_icon": "이모지", "ui_accent_color": "#FF8C00" } ] }`;
       
       const parsedData = await callGeminiAPI(systemPrompt);
+
+      if (parsedData.invalid_items && parsedData.invalid_items.length > 0) {
+        Alert.alert("🚨 식재료가 아닙니다!", `다음 항목은 요리에 사용할 수 없습니다:\n\n👉 ${parsedData.invalid_items.join(', ')}\n\n식재료만 기입해주세요.`);
+        setAppStep('camera'); setIsAnalyzing(false); setIsCurating(false);
+        return;
+      }
+
       setCurrentIngredients(parsedData.detected_ingredients || allIngredients);
       setCurationThemes(parsedData.curation_themes.slice(0, 3));
     } catch (error) {
@@ -179,16 +285,34 @@ export default function ScannerScreen() {
     } finally { setIsAnalyzing(false); setIsCurating(false); }
   };
 
-  const generateFromImage = async () => {
+  const generateFromImage = async (customStyleStr = "") => {
     setAppStep('result'); setIsAnalyzing(true); setIsCurating(true); setShowStyleModal(false); setCurationThemes(null); setRecipeResult(null); setShoppingList([]);
     try {
+      // --- [유저 맞춤 설정 불러오기] ---
+      const savedDietRaw = await AsyncStorage.getItem('cookdex_diet_goal');
+      let savedDiet = [];
+      try { savedDiet = savedDietRaw ? JSON.parse(savedDietRaw) : []; } catch (e) { savedDiet = savedDietRaw && savedDietRaw !== "없음" ? [savedDietRaw] : []; }
+      const savedAllergies = await AsyncStorage.getItem('cookdex_allergies');
+      const savedCondimentsRaw = await AsyncStorage.getItem('cookdex_condiments');
+      
+      const dietText = savedDiet.length > 0 ? `[식단 목표: ${savedDiet.join(', ')}]에 맞춰서 요리해 줘.` : "";
+      const allergyText = savedAllergies && savedAllergies !== "없음" ? `[🚨치명적 경고🚨 알레르기 및 기피 재료: ${savedAllergies}] 이 재료들은 레시피에 절대 포함시키지 마!` : "";
+      const condimentsText = savedCondimentsRaw ? `[보유 중인 기본 양념/향신료: ${JSON.parse(savedCondimentsRaw).join(', ')}] 이 재료들은 이미 집에 있으니 '부족한 구매 리스트'에서 빼고 자유롭게 써 줘.` : "";
+
+      const userContextPrompt = `\n\n--- 👨‍🍳 셰프 맞춤 설정 ---\n${dietText}\n${allergyText}\n${condimentsText}\n----------------------\n`;
+      // ---------------------------------
       const imageParts = photos.map(photo => ({ inline_data: { mime_type: "image/jpeg", data: photo.base64 } }));
-      const systemPrompt = `너는 최고의 셰프 '쿡덱스'야. 사진을 분석하고 유저가 추가한 [수동 재료: ${manualIngredients.join(', ')}]를 합쳐서 3가지 요리 테마를 제안해.
+      const systemPrompt = `너는 최고의 셰프 '쿡덱스'야. 사진을 분석하고 유저가 추가한 [수동 재료: ${manualIngredients.join(', ')}]를 합쳐서 3가지 요리 테마를 제안해.${userContextPrompt}
+      ${customStyleStr ? `[희망 요리 스타일: ${customStyleStr}]` : ''}
       과일(귤, 사과), 빵, 간식 등 사람이 먹을 수 있는게 하나라도 있으면 무조건 요리로 인정해.
       만약 사진에 식재료가 아예 없다면 "status": "NO_FOOD" 라고 반환해. 식재료가 있다면 "status": "SUCCESS" 로 반환해.
+      
+      ⚠️ 중요: 사진 속 물체나 입력된 재료 중 '먹을 수 없는 것(비식재료, 예: 물티슈, 그릇, 사람, 스마트폰 등)'이 있다면 반드시 "invalid_items" 배열에 포함시켜.
+
       오직 아래 JSON 스키마를 100% 준수해라.
       { 
         "status": "SUCCESS 또는 NO_FOOD",
+        "invalid_items": ["식재료가 아닌 것"],
         "detected_ingredients": ["인식된 식재료 + 수동 재료"], 
         "curation_themes": [ { "theme_title": "요리 이름", "match_reason": "추천 이유", "badge_icon": "이모지", "ui_accent_color": "#FF8C00" } ] 
       }`;
@@ -196,6 +320,19 @@ export default function ScannerScreen() {
       const parsedData = await callGeminiAPI(systemPrompt, imageParts);
 
       if (parsedData.status === "NO_FOOD") throw new Error("NO_FOOD_DETECTED");
+
+      if (parsedData.invalid_items && parsedData.invalid_items.length > 0) {
+        Alert.alert("🚨 식재료가 아닙니다!", `다음 항목은 요리에 사용할 수 없습니다:\n\n👉 ${parsedData.invalid_items.join(', ')}\n\n식재료를 촬영하거나 기입해주세요.`);
+        setAppStep('camera'); setIsCurating(false); setIsAnalyzing(false);
+        return;
+      }
+
+      // 🚨 [신규] 분석 성공 시 횟수 차감
+      if (scansLeft > 0) {
+        const newCount = scansLeft - 1;
+        setScansLeft(newCount);
+        await AsyncStorage.setItem('cookdex_daily_scans', JSON.stringify({ date: new Date().toLocaleDateString(), count: newCount }));
+      }
 
       setCurrentIngredients(parsedData.detected_ingredients || []);
       setCurationThemes(parsedData.curation_themes.slice(0, 3));
@@ -210,9 +347,12 @@ export default function ScannerScreen() {
 
       // 🚨 플랜 B 작동 (안전 필터 등에 걸렸을 때)
       if (manualIngredients.length > 0) {
+        const isNoFood = error.message === "NO_FOOD_DETECTED";
         Alert.alert(
-          "⚠️ 사진 인식 불가 (플랜 B 가동)", 
-          "사진 속 물체를 식재료로 파악하기 어렵거나 서버가 혼잡합니다.\n\n기입하신 수동 재료만으로 레시피를 제작할까요?",
+          isNoFood ? "⚠️ 식재료가 아닙니다" : "⚠️ 사진 인식 불가 (플랜 B 가동)", 
+          isNoFood 
+            ? "해당 물건은 식재료가 아니네요! 수동으로 기입하신 식재료로 레시피를 제작할까요?" 
+            : "사진 속 물체를 식재료로 파악하기 어렵거나 서버가 혼잡합니다.\n\n기입하신 수동 재료만으로 레시피를 제작할까요?",
           [
             { text: "아니오 (다시 찍기)", style: "cancel", onPress: () => { setAppStep('camera'); setIsCurating(false); setIsAnalyzing(false); } },
             { text: "네! 만들어주세요", onPress: () => { 
@@ -232,7 +372,20 @@ export default function ScannerScreen() {
   const generateFinalRecipe = async (theme) => {
     setIsGeneratingRecipe(true);
     try {
-      const systemPrompt = `너는 셰프야. 재료(${currentIngredients.join(', ')})를 가지고 [${theme.theme_title}] 레시피를 작성해.
+      // --- [유저 맞춤 설정 불러오기] ---
+      const savedDietRaw = await AsyncStorage.getItem('cookdex_diet_goal');
+      let savedDiet = [];
+      try { savedDiet = savedDietRaw ? JSON.parse(savedDietRaw) : []; } catch (e) { savedDiet = savedDietRaw && savedDietRaw !== "없음" ? [savedDietRaw] : []; }
+      const savedAllergies = await AsyncStorage.getItem('cookdex_allergies');
+      const savedCondimentsRaw = await AsyncStorage.getItem('cookdex_condiments');
+      
+      const dietText = savedDiet.length > 0 ? `[식단 목표: ${savedDiet.join(', ')}]에 맞춰서 요리해 줘.` : "";
+      const allergyText = savedAllergies && savedAllergies !== "없음" ? `[🚨치명적 경고🚨 알레르기 및 기피 재료: ${savedAllergies}] 이 재료들은 레시피에 절대 포함시키지 마!` : "";
+      const condimentsText = savedCondimentsRaw ? `[보유 중인 기본 양념/향신료: ${JSON.parse(savedCondimentsRaw).join(', ')}] 이 재료들은 이미 집에 있으니 '부족한 구매 리스트'에서 빼고 자유롭게 써 줘.` : "";
+
+      const userContextPrompt = `\n\n--- 👨‍🍳 셰프 맞춤 설정 ---\n${dietText}\n${allergyText}\n${condimentsText}\n----------------------\n`;
+      // ---------------------------------
+      const systemPrompt = `너는 셰프야. 재료(${currentIngredients.join(', ')})를 가지고 [${theme.theme_title}] 레시피를 작성해.${userContextPrompt}\n⚠️ 필수 지시사항: 1인분 기준 총 칼로리(kcal)와 영양성분을 정확히 계산하여 상단에 표기해.
       오직 JSON 형식으로 대답해.
       { 
         "safety_warning": "위생 경고 필요시 작성, 없으면 null", 
@@ -262,17 +415,31 @@ export default function ScannerScreen() {
     } catch (error) { Alert.alert("🚨 레시피 생성 실패", `상세 원인: ${error.message}`); setAppStep('camera'); } finally { setIsGeneratingRecipe(false); }
   };
 
-  const openTrainingModal = async (photoBase64) => {
-    setSelectedPhotoForTraining(photoBase64); setShowTrainingModal(true); setTrainingInput(""); setSelectedCategory(""); setAiCandidates([]); setIsFetchingCandidates(true);
-    try {
-      const systemPrompt = `사진 속 물체가 어떤 식재료인지 분석해서, 가장 가능성 높은 3가지 이름을 문자열 배열로만 응답해. 예시: ["애호박", "오이", "가지"]. 식재료가 아니라면 빈 배열 [] 을 반환해.`;
-      const parsedData = await callGeminiAPI(systemPrompt, [{ inline_data: { mime_type: "image/jpeg", data: photoBase64 } }]);
-      setAiCandidates(parsedData);
-    } catch (error) { setAiCandidates([]); } finally { setIsFetchingCandidates(false); }
+  const openTrainingModal = (index) => {
+    const photo = photos[index];
+    setSelectedPhotoForTraining(photo.base64);
+    setSelectedPhotoIndex(index);
+    setTrainingInput(photo.label || "");
+    setShowTrainingModal(true);
   };
 
   const submitTrainingData = async () => {
-    if (!selectedCategory || !trainingInput) { Alert.alert("알림", "카테고리와 식재료 이름을 모두 입력해주세요."); return; }
+    if (!trainingInput.trim()) { Alert.alert("알림", "식재료 이름을 입력해주세요."); return; }
+    
+    // 1. 로컬 상태 업데이트 (사진 라벨링)
+    setPhotos(prev => {
+      const newPhotos = [...prev];
+      if (selectedPhotoIndex !== null && newPhotos[selectedPhotoIndex]) {
+        newPhotos[selectedPhotoIndex] = { ...newPhotos[selectedPhotoIndex], label: trainingInput.trim() };
+      }
+      return newPhotos;
+    });
+
+    // 2. 수동 재료 리스트에도 추가 (AI가 인식할 수 있도록)
+    if(!manualIngredients.includes(trainingInput.trim())) {
+      setManualIngredients(prev => [...new Set([...prev, trainingInput.trim()])]);
+    }
+
     Alert.alert(
       "🚨 [경고] 데이터 제출 동의", 
       "유저 다수결 검증을 통해 허위/장난 정보(비식재료 등)를 고의로 학습시키려 한 정황이 파악될 경우, 심사 반려, 앱 이용 제한 및 조치를 당할 수 있습니다.\n\n해당 식재료를 제출하시겠습니까?",
@@ -282,11 +449,7 @@ export default function ScannerScreen() {
             try {
               const currentUser = auth.currentUser;
               if (currentUser) {
-                await addDoc(collection(db, "ai_training_data"), { imageUrl: "base64_data_omitted", proposedName: trainingInput, category: selectedCategory, submittedBy: currentUser.uid, status: "pending_votes", voteCount: 1, createdAt: new Date().toISOString() });
-                
-                if(!manualIngredients.includes(trainingInput)) {
-                  setManualIngredients(prev => [...new Set([...prev, trainingInput])]);
-                }
+                await addDoc(collection(db, "ai_training_data"), { imageUrl: "base64_data_omitted", proposedName: trainingInput, category: "UserLabel", submittedBy: currentUser.uid, status: "pending_votes", voteCount: 1, createdAt: new Date().toISOString() });
 
                 Alert.alert("제출 완료! 🎉", "AI 학습 데이터로 소중하게 쓰입니다. 심사 통과 이후 EXP가 지급됩니다!");
                 setShowTrainingModal(false);
@@ -345,7 +508,7 @@ export default function ScannerScreen() {
 
   const handleShopping = (item) => {
     const coupangSearchUrl = `https://m.coupang.com/nm/search?q=${encodeURIComponent(item)}`;
-    Linking.openURL(coupangSearchUrl).catch((err) => console.error('쿠팡 연결 실패', err));
+    Linking.openURL(coupangSearchUrl).catch((err) => console.error('쇼핑몰 연결 실패', err));
   };
 
   const startCookingMode = () => {
@@ -391,7 +554,7 @@ export default function ScannerScreen() {
                   <Text style={styles.commerceTitle}>🛒 부족한 필수 재료 바로 구매하기</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap: 10}}>
                     {shoppingList.map((item, idx) => (
-                      <TouchableOpacity key={idx} style={styles.commerceBtn} onPress={() => handleShopping(item)}><Text style={styles.commerceBtnText}>{item} 로켓검색 🚀</Text></TouchableOpacity>
+                      <TouchableOpacity key={idx} style={styles.commerceBtn} onPress={() => handleShopping(item)}><Text style={styles.commerceBtnText}>{item} 검색 🔍</Text></TouchableOpacity>
                     ))}
                   </ScrollView>
                 </View>
@@ -471,6 +634,9 @@ export default function ScannerScreen() {
         
         {/* QA 모드 뱃지 삭제됨 */}
 
+        {/* 🚨 [신규] 남은 횟수 뱃지 */}
+        <View style={styles.limitBadge}><Text style={styles.limitBadgeText}>오늘 스캔: {scansLeft}회 남음</Text></View>
+
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}><Text style={styles.backButtonText}>✕</Text></TouchableOpacity>
         
         <View style={styles.topHUDContainer}>
@@ -485,7 +651,7 @@ export default function ScannerScreen() {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbnailScroll} contentContainerStyle={styles.thumbnailScrollContent}>
                 {photos.map((photo, idx) => (
                   <View key={idx}>
-                    <TouchableOpacity onPress={() => openTrainingModal(photo.base64)}>
+                    <TouchableOpacity onPress={() => openTrainingModal(idx)}>
                       <Image source={{ uri: `data:image/jpeg;base64,${photo.base64}` }} style={styles.thumbnailImage} />
                     </TouchableOpacity>
                     <TouchableOpacity style={styles.deletePhotoBtn} onPress={() => removePhoto(idx)}>
@@ -511,7 +677,7 @@ export default function ScannerScreen() {
                     </TouchableOpacity>
                   </View>
                 )}
-                <TouchableOpacity style={styles.captureButton} onPress={takePicture}><View style={styles.captureButtonInner} /></TouchableOpacity>
+                <TouchableOpacity style={styles.captureButton} onPress={() => checkLimitAndRun(takePicture)}><View style={styles.captureButtonInner} /></TouchableOpacity>
             </View>
           </View>
         </View>
@@ -601,27 +767,7 @@ export default function ScannerScreen() {
                    <Image source={{ uri: `data:image/jpeg;base64,${selectedPhotoForTraining}` }} style={styles.trainingImagePreview} />
                  )}
 
-                 <Text style={styles.styleInputLabel}>1. 대분류를 선택해주세요 (필수)</Text>
-                 <View style={styles.styleTagsContainer}>
-                    {LABEL_CATEGORIES.map(cat => (
-                      <TouchableOpacity key={cat} style={[styles.styleTag, selectedCategory === cat && styles.styleTagActive]} onPress={() => setSelectedCategory(cat)}>
-                        <Text style={[styles.styleTagText, selectedCategory === cat && styles.styleTagTextActive]}>{cat}</Text>
-                      </TouchableOpacity>
-                    ))}
-                 </View>
-
-                 <Text style={[styles.styleInputLabel, {marginTop: 20}]}>2. 식재료 이름 (AI 소프트 매칭)</Text>
-                 {isFetchingCandidates ? (
-                   <ActivityIndicator size="small" color="#FF8C00" style={{marginVertical: 10}} />
-                 ) : (
-                   <View style={[styles.styleTagsContainer, {marginBottom: 10}]}>
-                     {aiCandidates.length > 0 ? aiCandidates.map((cand, idx) => (
-                        <TouchableOpacity key={idx} style={styles.quickTag} onPress={() => setTrainingInput(cand)}>
-                          <Text style={styles.quickTagText}>이거 혹시 '{cand}' 인가요?</Text>
-                        </TouchableOpacity>
-                     )) : <Text style={{fontSize: 12, color: '#8C7A76'}}>AI가 추측하지 못했습니다. 직접 적어주세요.</Text>}
-                   </View>
-                 )}
+                 <Text style={styles.styleInputLabel}>식재료 이름 입력</Text>
                  
                  <TextInput 
                    style={styles.customTextInput} 
@@ -643,6 +789,58 @@ export default function ScannerScreen() {
         </View>
       </Modal>
 
+      {/* 🚨 [신규] 희망 요리 스타일 사전 질문 모달 */}
+      <Modal visible={styleModalVisible} transparent={true} animationType="fade" onRequestClose={() => setStyleModalVisible(false)}>
+        <View style={styles.modalOverlayCenter}>
+            <View style={[styles.bottomSheetContainer, {height: 'auto', maxHeight: '80%', paddingBottom: 30, borderTopLeftRadius: 20, borderTopRightRadius: 20, borderRadius: 20}]}>
+                <Text style={styles.styleModalTitle}>✨ 스캔된 재료로 어떤 요리를 원하세요?</Text>
+                <Text style={{textAlign: 'center', color: '#8C7A76', marginBottom: 20}}>AI에게 알려주시면 더 마음에 드는 메뉴를 추천해 드려요!</Text>
+                
+                <TextInput
+                    style={styles.customTextInput}
+                    placeholder="예: 얼큰한 국물, 간단한 볶음, 다이어트식 등"
+                    placeholderTextColor="#A89F9C"
+                    value={preferredStyle}
+                    onChangeText={setPreferredStyle}
+                />
+                
+                <View style={styles.styleModalButtons}>
+                    <TouchableOpacity style={styles.styleModalCancel} onPress={() => confirmStyleAndGenerate("")}>
+                        <Text style={styles.styleModalBtnText}>건너뛰고 추천받기</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.styleModalSave} onPress={() => confirmStyleAndGenerate(preferredStyle)}>
+                        <Text style={styles.styleModalBtnTextWhite}>이 스타일로 요리하기</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+        </View>
+      </Modal>
+
+      {/* 횟수 소진 팝업 */}
+      <Modal visible={adPromptVisible} transparent={true} animationType="fade">
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.adModalContent}>
+            <Text style={styles.adTitle}>스캔 횟수 소진 🥲</Text>
+            <Text style={styles.adSub}>오늘의 무료 스캔 횟수를 모두 사용하셨습니다.</Text>
+            <TouchableOpacity style={styles.watchAdBtn} onPress={playMockAd}>
+              <Text style={styles.watchAdBtnText}>🎁 30초 광고 보고 1회 충전하기</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.closeAdBtn} onPress={() => setAdPromptVisible(false)}>
+              <Text style={styles.closeAdBtnText}>나중에 할게요</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 가상 광고 재생화면 (전체화면) */}
+      <Modal visible={mockAdPlaying} transparent={false} animationType="slide">
+        <View style={styles.mockAdContainer}>
+          <Text style={styles.mockAdTitle}>📺 스폰서 광고 재생 중...</Text>
+          <Text style={styles.mockAdTimer}>{adCountdown}초 후 보상이 지급됩니다</Text>
+          <ActivityIndicator size="large" color="#FF8C00" style={{marginTop: 30}} />
+        </View>
+      </Modal>
+
     </View>
   );
 }
@@ -650,49 +848,103 @@ export default function ScannerScreen() {
 const markdownStyles = StyleSheet.create({ body: { color: '#F9F5F3', fontSize: 15, lineHeight: 24 }, heading1: { color: '#FFB347', fontSize: 22, fontWeight: 'bold' }, blockquote: { backgroundColor: '#4A3F3A', borderLeftWidth: 4, borderLeftColor: '#FFB347', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5, marginVertical: 10 } });
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' }, camera: { flex: 1 }, overlay: { flex: 1, backgroundColor: 'transparent' }, 
-  bottomMask: { flex: 1, backgroundColor: 'transparent', width: '100%', justifyContent: 'flex-end' },
-  
-  backButton: { position: 'absolute', top: 45, right: 20, zIndex: 30, padding: 10, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 20 }, backButtonText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
-  
-  topHUDContainer: { position: 'absolute', top: 90, left: 0, right: 0, zIndex: 10, paddingLeft: 20 },
-  addedManualIngredientsBox: { backgroundColor: 'rgba(0,0,0,0.7)', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 12, marginBottom: 10, alignSelf: 'flex-start' },
-  
-  trainingHintText: { color: '#FFB347', fontSize: 12, fontWeight: '900', marginBottom: 5, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: {width:1, height:1}, textShadowRadius: 2 },
-  thumbnailScroll: { maxHeight: 85, paddingTop: 5 }, 
-  thumbnailScrollContent: { gap: 10, paddingRight: 20 },
-  thumbnailImage: { width: 65, height: 65, borderRadius: 10, borderWidth: 2, borderColor: '#FF8C00' },
-  deletePhotoBtn: { position: 'absolute', top: 0, right: 0, backgroundColor: '#FF6B6B', width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center', zIndex: 10, borderWidth: 1, borderColor: '#fff' },
+  container: { flex: 1, backgroundColor: '#2A2421' },
+  camera: { flex: 1 },
+  limitBadge: { position: 'absolute', top: 50, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, zIndex: 10 },
+  limitBadgeText: { color: '#FF8C00', fontWeight: 'bold', fontSize: 13 },
+  backButton: { position: 'absolute', top: 50, left: 20, backgroundColor: 'rgba(0,0,0,0.5)', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', zIndex: 10 },
+  backButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  topHUDContainer: { position: 'absolute', top: 100, left: 20, right: 20, zIndex: 5 },
+  addedManualIngredientsBox: { backgroundColor: 'rgba(255, 140, 0, 0.9)', padding: 10, borderRadius: 10, alignSelf: 'flex-start', marginBottom: 10 },
+  trainingHintText: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold', marginBottom: 10, textShadowColor: '#000', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 3 },
+  thumbnailScroll: { maxHeight: 80 },
+  thumbnailScrollContent: { gap: 10 },
+  thumbnailImage: { width: 60, height: 60, borderRadius: 10, borderWidth: 2, borderColor: '#FF8C00' },
+  deletePhotoBtn: { position: 'absolute', top: -5, right: -5, backgroundColor: 'red', width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
   deletePhotoBtnText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
-
-  controlsArea: { height: 190, width: '100%', alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 60 }, 
-  scannerActionRow: { flexDirection: 'row', gap: 15, marginBottom: 20 },
-  analyzeMultiButton: { backgroundColor: '#FF8C00', paddingVertical: 15, paddingHorizontal: 25, borderRadius: 30, shadowColor: '#000', shadowOffset: {width:0, height:4}, shadowOpacity: 0.3, shadowRadius: 5, elevation: 5 }, 
-  captureButton: { width: 76, height: 76, borderRadius: 38, backgroundColor: 'rgba(255, 255, 255, 0.3)', justifyContent: 'center', alignItems: 'center' }, captureButtonInner: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#fff' },
-
-  themeCard: { backgroundColor: '#3A322F', borderRadius: 16, padding: 20, marginBottom: 15, borderWidth: 1, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.2, shadowRadius: 6, elevation: 2 },
-
-  resultBg: { flex: 1, backgroundColor: '#2A2421' }, resultContainer: { flex: 1, backgroundColor: '#3A322F', marginHorizontal: 12, marginTop: 40, borderRadius: 15, padding: 15 }, loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center' }, loadingText: { color: '#FFB347', marginTop: 15, fontWeight: 'bold' }, recipeScroll: { flex: 1 },
-  previewControlsGrid: { flexDirection: 'row', justifyContent: 'center', gap: 6, paddingBottom: 10, paddingTop: 15, paddingHorizontal: 15 }, gridButton: { paddingVertical: 14, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }, buttonText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-  
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(58, 46, 43, 0.6)', justifyContent: 'flex-end' }, bottomSheetContainer: { height: '88%', backgroundColor: '#FFFDF9', borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingHorizontal: 20, paddingBottom: 20 }, bottomSheetContainerWrapper: { width: '100%', justifyContent: 'flex-end' }, dragHandle: { width: 50, height: 5, backgroundColor: '#E8D5D0', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 15 }, modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#E8D5D0', marginBottom: 15 }, modalTitleText: { fontSize: 18, color: '#3A2E2B', fontWeight: '900' }, closeButton: { backgroundColor: '#F5EBE7', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 20 }, closeButtonText: { color: '#3A2E2B', fontSize: 14, fontWeight: 'bold' },
-  
-  styleModalTitle: { color: '#8E24AA', fontSize: 20, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' }, styleInputLabel: { color: '#3A2E2B', fontSize: 14, fontWeight: 'bold', marginBottom: 8, marginTop: 10 }, styleTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5 }, 
-  styleTag: { paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#F9F5F3', borderRadius: 20, borderWidth: 1, borderColor: '#E8D5D0', flexShrink: 0 }, 
-  styleTagActive: { backgroundColor: '#8E24AA', borderColor: '#AB47BC' }, styleTagText: { color: '#8C7A76', fontSize: 13, fontWeight: 'bold' }, styleTagTextActive: { color: '#fff', fontSize: 13, fontWeight: 'bold' }, customTextInput: { backgroundColor: '#F9F5F3', color: '#3A2E2B', paddingHorizontal: 15, paddingVertical: 12, borderRadius: 10, fontSize: 14, borderWidth: 1, borderColor: '#E8D5D0', marginTop: 10 }, styleModalButtons: { flexDirection: 'row', justifyContent: 'center', gap: 15, width: '100%', marginTop: 25 }, styleModalCancel: { backgroundColor: '#F5EBE7', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flex: 1 }, styleModalSave: { backgroundColor: '#8E24AA', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flex: 1.5 }, styleModalBtnText: { color: '#8C7A76', fontWeight: 'bold', fontSize: 15, textAlign: 'center' }, styleModalBtnTextWhite: { color: '#fff', fontWeight: 'bold', fontSize: 15, textAlign: 'center' },
-  
-  sectionLabel: { fontSize: 13, fontWeight: 'bold', color: '#FF8C00', marginBottom: 8 }, quickTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 15 }, quickTag: { backgroundColor: '#FFF3E0', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, borderColor: '#FFCC80' }, quickTagText: { color: '#E65100', fontSize: 12, fontWeight: 'bold' }, selectedTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12, marginTop: 5 }, autocompleteContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15, padding: 10, backgroundColor: '#F9F5F3', borderRadius: 10 }, tagBadge: { paddingVertical: 8, paddingHorizontal: 14, backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#E8D5D0' }, tagBadgeActive: { paddingVertical: 8, paddingHorizontal: 14, backgroundColor: '#FF8C00', borderRadius: 20, borderWidth: 1, borderColor: '#FF8C00' }, tagText: { color: '#8C7A76', fontSize: 13, fontWeight: 'bold' }, tagTextActive: { color: '#fff', fontSize: 13, fontWeight: 'bold' }, customAddBadge: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: '#FFF3E0', borderRadius: 10, borderWidth: 1, borderColor: '#FFB74D', width: '100%', alignItems: 'center' }, customAddText: { color: '#E65100', fontSize: 14, fontWeight: 'bold' },
-  
-  inlineInputRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }, inlineTextInput: { flex: 1, backgroundColor: '#F9F5F3', color: '#3A2E2B', paddingHorizontal: 15, paddingVertical: 14, borderRadius: 12, fontSize: 14, borderWidth: 1, borderColor: '#E8D5D0' }, inlineAddBtn: { backgroundColor: '#4CAF50', paddingVertical: 14, paddingHorizontal: 20, borderRadius: 12, justifyContent: 'center', alignItems: 'center' }, inlineAddBtnText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-
-  commerceSection: { marginTop: 20, paddingVertical: 15, borderTopWidth: 1, borderTopColor: '#4A3F3A' }, commerceTitle: { fontSize: 15, fontWeight: '900', color: '#FFB347', marginBottom: 12 }, commerceBtn: { backgroundColor: '#F9F5F3', paddingVertical: 10, paddingHorizontal: 15, borderRadius: 20, borderWidth: 1, borderColor: '#FFB347' }, commerceBtnText: { color: '#2A2421', fontSize: 13, fontWeight: 'bold' },
-
-  ttsStartBtn: { backgroundColor: '#E3F2FD', paddingVertical: 15, borderRadius: 15, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#CE93D8' }, ttsStartBtnText: { color: '#8E24AA', fontSize: 15, fontWeight: '900' }, ttsContainer: { flex: 1, backgroundColor: '#2A2421', padding: 20, justifyContent: 'space-between' }, ttsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 }, ttsStepIndicator: { color: '#FFB347', fontSize: 18, fontWeight: 'bold' }, ttsCloseBtn: { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 20 }, ttsCloseBtnText: { color: '#fff', fontWeight: 'bold' }, ttsBody: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10 }, ttsBigText: { color: '#FFFDF9', fontSize: 32, fontWeight: '900', textAlign: 'center', lineHeight: 45 }, ttsControls: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 }, ttsBtn: { backgroundColor: '#4A3F3A', paddingVertical: 20, flex: 1, borderRadius: 20, alignItems: 'center', marginHorizontal: 5 }, ttsBtnText: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold' }, ttsBtnMain: { backgroundColor: '#FF8C00', paddingVertical: 25, flex: 1.5, borderRadius: 25, alignItems: 'center', marginHorizontal: 5, shadowColor: '#FF8C00', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 }, ttsBtnMainText: { color: '#fff', fontSize: 18, fontWeight: '900' },
-
-  modalOverlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 },
-  trainingModalContent: { width: '100%', maxHeight: windowHeight * 0.85, backgroundColor: '#FFFDF9', borderRadius: 20, padding: 20, shadowColor: '#000', shadowOffset: {width:0, height:10}, shadowOpacity: 0.3, shadowRadius: 20, elevation: 10 },
-  trainingGuideText: { fontSize: 13, color: '#4CAF50', fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
-  trainingImagePreview: { width: 100, height: 100, borderRadius: 10, alignSelf: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#E8D5D0' },
-  legalWarningBox: { marginTop: 15, backgroundColor: '#FFEBEE', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#FFCDD2' },
-  legalWarningText: { color: '#C62828', fontSize: 11, fontWeight: 'bold', textAlign: 'center', lineHeight: 16 }
+  overlay: { flex: 1, justifyContent: 'flex-end' },
+  bottomMask: { backgroundColor: 'rgba(42, 36, 33, 0.8)', paddingBottom: 40, paddingTop: 20, borderTopLeftRadius: 30, borderTopRightRadius: 30 },
+  controlsArea: { alignItems: 'center', gap: 20 },
+  scannerActionRow: { flexDirection: 'row', gap: 15, marginBottom: 10 },
+  analyzeMultiButton: { backgroundColor: '#FF8C00', paddingVertical: 12, paddingHorizontal: 25, borderRadius: 20 },
+  buttonText: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  captureButton: { width: 70, height: 70, borderRadius: 35, backgroundColor: '#A89F9C', justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#FFFDF9' },
+  captureButtonInner: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#FFFDF9' },
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+  bottomSheetContainer: { backgroundColor: '#2A2421', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
+  dragHandle: { width: 40, height: 5, backgroundColor: '#4A3F3A', borderRadius: 3, alignSelf: 'center', marginBottom: 15 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  modalTitleText: { color: '#FF8C00', fontSize: 18, fontWeight: 'bold' },
+  closeButton: { padding: 5 },
+  closeButtonText: { color: '#A89F9C', fontSize: 14, fontWeight: 'bold' },
+  sectionLabel: { color: '#A89F9C', fontSize: 13, fontWeight: 'bold', marginBottom: 10 },
+  quickTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  quickTag: { backgroundColor: '#3A322F', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, borderColor: '#4A3F3A' },
+  quickTagText: { color: '#FFFDF9', fontSize: 13 },
+  selectedTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20, padding: 15, backgroundColor: '#3A322F', borderRadius: 12 },
+  tagBadgeActive: { backgroundColor: '#FF8C00', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15 },
+  tagTextActive: { color: '#000', fontSize: 13, fontWeight: 'bold' },
+  inlineInputRow: { flexDirection: 'row', gap: 10, marginBottom: 15 },
+  inlineTextInput: { flex: 1, backgroundColor: '#3A322F', color: '#FFFDF9', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 12, borderWidth: 1, borderColor: '#4A3F3A' },
+  inlineAddBtn: { backgroundColor: '#5A4E49', justifyContent: 'center', paddingHorizontal: 20, borderRadius: 12 },
+  inlineAddBtnText: { color: '#FFFDF9', fontWeight: 'bold' },
+  autocompleteContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  tagBadge: { backgroundColor: '#4A3F3A', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 15 },
+  tagText: { color: '#FFFDF9', fontSize: 13 },
+  customAddBadge: { backgroundColor: '#5A4E49', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 15 },
+  customAddText: { color: '#FFB347', fontSize: 13, fontWeight: 'bold' },
+  modalOverlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
+  trainingModalContent: { backgroundColor: '#2A2421', borderRadius: 20, padding: 20, width: '100%', borderWidth: 1, borderColor: '#FF8C00' },
+  styleModalTitle: { color: '#FFFDF9', fontSize: 20, fontWeight: '900', marginBottom: 15 },
+  trainingGuideText: { color: '#A89F9C', fontSize: 13, marginBottom: 15 },
+  trainingImagePreview: { width: '100%', height: 200, borderRadius: 15, marginBottom: 15, resizeMode: 'cover' },
+  styleInputLabel: { color: '#FFB347', fontSize: 14, fontWeight: 'bold', marginBottom: 10 },
+  customTextInput: { backgroundColor: '#3A322F', color: '#FFFDF9', borderRadius: 12, padding: 15, borderWidth: 1, borderColor: '#4A3F3A', marginBottom: 15 },
+  legalWarningBox: { backgroundColor: '#4A3F3A', padding: 15, borderRadius: 12, borderLeftWidth: 4, borderLeftColor: '#E53935' },
+  legalWarningText: { color: '#FFFDF9', fontSize: 12, lineHeight: 18 },
+  styleModalSave: { backgroundColor: '#FF8C00', paddingVertical: 15, borderRadius: 12, alignItems: 'center' },
+  styleModalBtnTextWhite: { color: '#000', fontSize: 16, fontWeight: 'bold' },
+  styleModalButtons: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  styleModalCancel: { flex: 1, backgroundColor: '#4A3F3A', paddingVertical: 15, borderRadius: 12, alignItems: 'center' },
+  styleModalBtnText: { color: '#FFFDF9', fontSize: 15, fontWeight: 'bold' },
+  adModalContent: { backgroundColor: '#2A2421', borderRadius: 24, padding: 25, alignItems: 'center', borderWidth: 1, borderColor: '#4A3F3A' },
+  adTitle: { color: '#FF8C00', fontSize: 22, fontWeight: 'bold', marginBottom: 10 },
+  adSub: { color: '#FFFDF9', fontSize: 14, textAlign: 'center', marginBottom: 25 },
+  watchAdBtn: { backgroundColor: '#FF8C00', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 12, width: '100%', alignItems: 'center', marginBottom: 10 },
+  watchAdBtnText: { color: '#000', fontSize: 15, fontWeight: 'bold' },
+  closeAdBtn: { paddingVertical: 15 },
+  closeAdBtnText: { color: '#A89F9C', fontSize: 14, fontWeight: 'bold' },
+  mockAdContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
+  mockAdTitle: { color: '#FFFDF9', fontSize: 22, fontWeight: 'bold', marginBottom: 20 },
+  mockAdTimer: { color: '#FF8C00', fontSize: 40, fontWeight: '900' },
+  resultBg: { flex: 1, backgroundColor: '#2A2421' },
+  resultContainer: { flex: 1, padding: 20, paddingTop: 50 },
+  loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { color: '#FF8C00', marginTop: 15, fontSize: 16, fontWeight: 'bold' },
+  themeCard: { backgroundColor: '#3A322F', padding: 15, borderRadius: 15, marginBottom: 15, borderWidth: 1 },
+  recipeScroll: { flex: 1 },
+  ttsStartBtn: { backgroundColor: '#3A322F', paddingVertical: 12, borderRadius: 12, alignItems: 'center', marginBottom: 20, borderWidth: 1, borderColor: '#5A4E49' },
+  ttsStartBtnText: { color: '#FFFDF9', fontSize: 14, fontWeight: 'bold' },
+  commerceSection: { marginTop: 30, backgroundColor: '#3A322F', padding: 15, borderRadius: 15, borderWidth: 1, borderColor: '#4A3F3A' },
+  commerceTitle: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold', marginBottom: 15 },
+  commerceBtn: { backgroundColor: '#5A4E49', paddingVertical: 10, paddingHorizontal: 15, borderRadius: 10 },
+  commerceBtnText: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold' },
+  previewControlsGrid: { flexDirection: 'row', gap: 10, padding: 20, paddingBottom: 10 },
+  gridButton: { paddingVertical: 15, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  styleTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 15 },
+  styleTag: { backgroundColor: '#3A322F', paddingVertical: 10, paddingHorizontal: 15, borderRadius: 20, borderWidth: 1, borderColor: '#4A3F3A' },
+  styleTagActive: { backgroundColor: '#FF8C00', borderColor: '#FF8C00' },
+  styleTagText: { color: '#FFFDF9', fontSize: 14, fontWeight: 'bold' },
+  styleTagTextActive: { color: '#000', fontSize: 14, fontWeight: 'bold' },
+  ttsContainer: { flex: 1, backgroundColor: '#2A2421', padding: 20, paddingTop: 60 },
+  ttsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 },
+  ttsStepIndicator: { color: '#FF8C00', fontSize: 18, fontWeight: 'bold' },
+  ttsCloseBtn: { backgroundColor: '#4A3F3A', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 15 },
+  ttsCloseBtnText: { color: '#FFFDF9', fontWeight: 'bold' },
+  ttsBody: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  ttsBigText: { color: '#FFFDF9', fontSize: 28, fontWeight: 'bold', textAlign: 'center', lineHeight: 40 },
+  ttsControls: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 40 },
+  ttsBtn: { backgroundColor: '#4A3F3A', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 15 },
+  ttsBtnMain: { backgroundColor: '#FF8C00', paddingVertical: 15, paddingHorizontal: 30, borderRadius: 15 },
+  ttsBtnMainText: { color: '#000', fontSize: 16, fontWeight: 'bold' }
 });

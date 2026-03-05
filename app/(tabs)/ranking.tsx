@@ -2,7 +2,8 @@
 import { useFocusEffect } from 'expo-router';
 import { collection, getDocs, limit, orderBy, query } from 'firebase/firestore';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db } from '../../firebaseConfig';
 
 // 칭호 계산기 (index.tsx와 동일한 로직)

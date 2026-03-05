@@ -1,28 +1,67 @@
-// 파일 위치: app/(tabs)/plaza.tsx
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from 'expo-router';
+import * as Speech from 'expo-speech';
 import { collection, doc, getDocs, increment, limit, orderBy, query, updateDoc } from 'firebase/firestore';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Linking, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import { db } from '../../firebaseConfig';
 
+const DAILY_PLAZA_LIMIT = 5;
+
 export default function PlazaScreen() {
   const [globalRecipes, setGlobalRecipes] = useState([]);
+  const [topRecipes, setTopRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedRecipe, setSelectedRecipe] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
 
-  // 화면에 진입할 때마다 Firebase에서 최신 공유 레시피를 불러옵니다.
+  // BM 및 열람 제한 상태
+  const [isProUser, setIsProUser] = useState(false); 
+  const [proModalVisible, setProModalVisible] = useState(false);
+  const [plazaViewsLeft, setPlazaViewsLeft] = useState(DAILY_PLAZA_LIMIT);
+
+  // 상태(State) 및 메모이제이션 추가:
+  const [myCondiments, setMyCondiments] = useState([]);
+  const [isFilterActive, setIsFilterActive] = useState(false);
+
+  // TTS 조리 모드 상태
+  const [isCookingMode, setIsCookingMode] = useState(false);
+  const [cookingSteps, setCookingSteps] = useState([]);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+
+  const [shoppingModalVisible, setShoppingModalVisible] = useState(false);
+  const [searchIngredient, setSearchIngredient] = useState("");
+
+  const handleShoppingSearch = () => {
+    if (!searchIngredient.trim()) {
+      Alert.alert("알림", "검색할 식재료를 입력해주세요.");
+      return;
+    }
+    const coupangUrl = `https://m.coupang.com/nm/search?q=${encodeURIComponent(searchIngredient.trim())}`;
+    Linking.openURL(coupangUrl);
+    setShoppingModalVisible(false);
+    setSearchIngredient("");
+  };
+
+  // 화면 진입 시 DB 피드와 일일 열람 횟수 로드
   useFocusEffect(
     useCallback(() => {
       fetchGlobalRecipes();
+      loadDailyViews();
+      const loadMyCondiments = async () => {
+        try {
+          const savedRaw = await AsyncStorage.getItem('cookdex_condiments');
+          if (savedRaw) setMyCondiments(JSON.parse(savedRaw));
+        } catch (e) {}
+      };
+      loadMyCondiments();
     }, [])
   );
 
   const fetchGlobalRecipes = async () => {
     setLoading(true);
     try {
-      // 최신순으로 최대 30개의 레시피를 가져옵니다.
       const recipesRef = collection(db, "global_recipes");
       const q = query(recipesRef, orderBy("createdAt", "desc"), limit(30));
       const querySnapshot = await getDocs(q);
@@ -32,6 +71,9 @@ export default function PlazaScreen() {
         recipes.push({ id: doc.id, ...doc.data() });
       });
       
+      const sortedByLikes = [...recipes].sort((a, b) => (b.likes || 0) - (a.likes || 0));
+      setTopRecipes(sortedByLikes.slice(0, 3));
+
       setGlobalRecipes(recipes);
     } catch (error) {
       console.error("광장 레시피 로드 에러:", error);
@@ -40,50 +82,122 @@ export default function PlazaScreen() {
     }
   };
 
-  // 좋아요 버튼 기능 (Firebase DB 업데이트 및 로컬 UI 반영)
+  const loadDailyViews = async () => {
+    try {
+      const today = new Date().toLocaleDateString();
+      const limitDataRaw = await AsyncStorage.getItem('cookdex_plaza_daily_views');
+      if (limitDataRaw) {
+        const limitData = JSON.parse(limitDataRaw);
+        if (limitData.date === today) {
+          setPlazaViewsLeft(limitData.count);
+        } else {
+          setPlazaViewsLeft(DAILY_PLAZA_LIMIT);
+          await AsyncStorage.setItem('cookdex_plaza_daily_views', JSON.stringify({ date: today, count: DAILY_PLAZA_LIMIT }));
+        }
+      } else {
+        await AsyncStorage.setItem('cookdex_plaza_daily_views', JSON.stringify({ date: today, count: DAILY_PLAZA_LIMIT }));
+      }
+    } catch (error) {}
+  };
+
   const handleLike = async (recipeId) => {
     try {
-      // 로컬 UI 즉각 업데이트 (Optimistic UI)
-      setGlobalRecipes(prev => 
-        prev.map(recipe => 
-          recipe.id === recipeId ? { ...recipe, likes: (recipe.likes || 0) + 1 } : recipe
-        )
-      );
-
-      // DB 업데이트
+      setGlobalRecipes(prev => prev.map(recipe => recipe.id === recipeId ? { ...recipe, likes: (recipe.likes || 0) + 1 } : recipe));
       const recipeDocRef = doc(db, "global_recipes", recipeId);
-      await updateDoc(recipeDocRef, {
-        likes: increment(1)
-      });
+      await updateDoc(recipeDocRef, { likes: increment(1) });
     } catch (error) {
       Alert.alert("에러", "좋아요를 반영하지 못했습니다.");
-      // 실패 시 원래대로 되돌리는 로직이 필요할 수 있으나 피드 갱신으로 대체
       fetchGlobalRecipes(); 
     }
   };
 
-  // 마크다운에서 '# 제목' 부분만 추출하는 함수
-  const extractTitle = (content) => {
-    const match = content.match(/#\s+(.*)/);
-    return match ? match[1] : "이름 없는 요리";
+  // 열람 횟수 검사 후 레시피 열기
+  const handleRecipeClick = async (recipe) => {
+    if (isProUser) {
+      setSelectedRecipe(recipe);
+      setModalVisible(true);
+      return;
+    }
+
+    if (plazaViewsLeft > 0) {
+      const newCount = plazaViewsLeft - 1;
+      setPlazaViewsLeft(newCount);
+      await AsyncStorage.setItem('cookdex_plaza_daily_views', JSON.stringify({
+        date: new Date().toLocaleDateString(),
+        count: newCount
+      }));
+      setSelectedRecipe(recipe);
+      setModalVisible(true);
+    } else {
+      setProModalVisible(true);
+    }
   };
 
-  // 날짜 포맷 변환 함수
-  const formatDate = (isoString) => {
-    if (!isoString) return "";
-    const date = new Date(isoString);
-    return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
+  // 내 주방으로 스크랩
+  const handleScrap = async () => {
+    if (!selectedRecipe) return;
+    try {
+      const existingData = await AsyncStorage.getItem('cookdex_saved_recipes');
+      const savedRecipes = existingData ? JSON.parse(existingData) : [];
+      
+      if (savedRecipes.some(r => r.id === selectedRecipe.id)) {
+        Alert.alert("알림", "이미 내 주방에 저장된 레시피입니다.");
+        return;
+      }
+      
+      const newRecipe = {
+        id: selectedRecipe.id,
+        date: new Date().toLocaleDateString(),
+        content: selectedRecipe.content
+      };
+      
+      savedRecipes.unshift(newRecipe);
+      await AsyncStorage.setItem('cookdex_saved_recipes', JSON.stringify(savedRecipes));
+      Alert.alert("스크랩 완료! 📥", "이 레시피가 내 주방에 안전하게 저장되었습니다.");
+    } catch (error) {
+      Alert.alert("에러", "스크랩에 실패했습니다.");
+    }
   };
+
+  // TTS 조리 모드 로직
+  const startCookingMode = () => {
+    if (!selectedRecipe) return;
+    const extractedSteps = selectedRecipe.content.split('\n').filter(line => /^\d+\.\s/.test(line.trim())).map(line => line.replace(/^\d+\.\s/, '').replace(/\*\*/g, '').trim());
+    if (extractedSteps.length === 0) { Alert.alert("알림", "조리 단계를 명확히 인식하지 못했습니다."); return; }
+    setCookingSteps(extractedSteps); setCurrentStepIndex(0); setIsCookingMode(true);
+    Speech.speak(extractedSteps[0], { language: 'ko-KR', rate: 0.95, pitch: 1.0 });
+  };
+  const handleNextStep = () => { if (currentStepIndex < cookingSteps.length - 1) { Speech.stop(); setCurrentStepIndex(prev => prev + 1); Speech.speak(cookingSteps[currentStepIndex + 1], { language: 'ko-KR', rate: 0.95 }); } };
+  const handlePrevStep = () => { if (currentStepIndex > 0) { Speech.stop(); setCurrentStepIndex(prev => prev - 1); Speech.speak(cookingSteps[currentStepIndex - 1], { language: 'ko-KR', rate: 0.95 }); } };
+  const handleReplayStep = () => { Speech.stop(); Speech.speak(cookingSteps[currentStepIndex], { language: 'ko-KR', rate: 0.95 }); };
+  const handleExitCookingMode = () => { Speech.stop(); setIsCookingMode(false); };
+
+  const extractTitle = (content) => { const match = content.match(/#\s+(.*)/); return match ? match[1] : "이름 없는 요리"; };
+  const formatDate = (isoString) => { if (!isoString) return ""; const date = new Date(isoString); return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`; };
+
+  const displayedRecipes = React.useMemo(() => {
+    if (!isFilterActive || myCondiments.length === 0) return globalRecipes;
+    
+    return [...globalRecipes].sort((a, b) => {
+      // 이모지 떼고 한글 단어만 추출 (예: "소금 🧂" -> "소금")
+      const countA = myCondiments.filter(c => a.content.includes(c.split(' ')[0])).length;
+      const countB = myCondiments.filter(c => b.content.includes(c.split(' ')[0])).length;
+      return countB - countA; // 많이 포함된 순으로 내림차순 정렬
+    });
+  }, [globalRecipes, isFilterActive, myCondiments]);
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* 상단 헤더 */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>요리 광장 🌍</Text>
-        <Text style={styles.headerSub}>전 세계 셰프들의 AI 레시피 피드</Text>
+        <View>
+          <Text style={styles.headerTitle}>요리 광장 🌍</Text>
+          <Text style={styles.headerSub}>전 세계 셰프들의 AI 레시피 피드</Text>
+        </View>
+        <View style={styles.limitBadge}>
+          <Text style={styles.limitBadgeText}>오늘 열람: {isProUser ? '무제한' : `${plazaViewsLeft}회 남음`}</Text>
+        </View>
       </View>
 
-      {/* 로딩 상태 및 리스트 렌더링 */}
       {loading ? (
         <View style={styles.centerBox}>
           <ActivityIndicator size="large" color="#FF8C00" />
@@ -97,46 +211,96 @@ export default function PlazaScreen() {
         </View>
       ) : (
         <FlatList
-          data={globalRecipes}
+          data={displayedRecipes}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContainer}
           showsVerticalScrollIndicator={false}
-          renderItem={({ item }) => (
-            <View style={styles.feedCard}>
-              <TouchableOpacity 
-                activeOpacity={0.8}
-                onPress={() => { setSelectedRecipe(item); setModalVisible(true); }}
-                style={styles.feedContent}
-              >
-                <View style={styles.cardHeader}>
-                  <View style={styles.authorBox}>
-                    <Text style={styles.authorIcon}>👨‍🍳</Text>
-                    <Text style={styles.authorName}>{item.authorName}</Text>
-                  </View>
-                  <Text style={styles.cardDate}>{formatDate(item.createdAt)}</Text>
+          ListHeaderComponent={
+            <>
+              {/* 👑 이달의 랭킹 셰프 (명예의 전당) */}
+              {topRecipes.length > 0 && (
+                <View style={styles.rankingSection}>
+                  <Text style={styles.rankingTitle}>🏆 이달의 명예의 전당 (Top 3)</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rankingScroll}>
+                    {topRecipes.map((item, index) => (
+                      <TouchableOpacity 
+                        key={`top-${item.id}`} 
+                        style={styles.rankingCard}
+                        activeOpacity={0.8}
+                        onPress={() => handleRecipeClick(item)}
+                      >
+                        <View style={styles.rankingBadge}>
+                          <Text style={styles.rankingBadgeText}>{index === 0 ? '🥇 1위' : index === 1 ? '🥈 2위' : '🥉 3위'}</Text>
+                        </View>
+                        <Text style={styles.rankingAuthor}>{item.authorName} 셰프</Text>
+                        <Text style={styles.rankingRecipeTitle} numberOfLines={1}>{extractTitle(item.content)}</Text>
+                        <View style={styles.rankingLikeBox}>
+                          <Text style={styles.rankingLikeIcon}>❤️ {item.likes || 0}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
                 </View>
-                <Text style={styles.cardTitle} numberOfLines={2}>{extractTitle(item.content)}</Text>
-                <Text style={styles.cardPreview} numberOfLines={3}>
-                  {item.content.replace(/#/g, '').replace(/\*/g, '').trim()}
-                </Text>
-              </TouchableOpacity>
-              
-              {/* 피드 하단 액션 바 (좋아요) */}
-              <View style={styles.cardFooter}>
-                <TouchableOpacity style={styles.likeBtn} onPress={() => handleLike(item.id)}>
-                  <Text style={styles.likeIcon}>❤️</Text>
-                  <Text style={styles.likeCount}>{item.likes || 0}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => { setSelectedRecipe(item); setModalVisible(true); }}>
-                  <Text style={styles.readMoreText}>레시피 보기 →</Text>
+              )}
+
+              {/* 🧂 내 양념장 맞춤 정렬 토글 */}
+              <View style={styles.filterContainer}>
+                <TouchableOpacity 
+                  style={[styles.filterBtn, isFilterActive && styles.filterBtnActive]} 
+                  onPress={() => {
+                    if (myCondiments.length === 0) {
+                      Alert.alert("알림", "프로필 탭에서 '우리 집 기본 양념장'을 먼저 설정해주세요!");
+                      return;
+                    }
+                    setIsFilterActive(!isFilterActive);
+                  }}
+                >
+                  <Text style={[styles.filterBtnText, isFilterActive && styles.filterBtnTextActive]}>
+                    🧂 내 양념장 맞춤 정렬 {isFilterActive ? 'ON' : 'OFF'}
+                  </Text>
                 </TouchableOpacity>
               </View>
-            </View>
-          )}
+            </>
+          }
+          renderItem={({ item }) => {
+            const matchCount = isFilterActive ? myCondiments.filter(c => item.content.includes(c.split(' ')[0])).length : 0;
+            return (
+              <View style={styles.feedCard}>
+                <TouchableOpacity activeOpacity={0.8} onPress={() => handleRecipeClick(item)} style={styles.feedContent}>
+                  <View style={styles.cardHeader}>
+                    <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                      <View style={[styles.authorBox, item.likes >= 10 && { backgroundColor: '#FF8C00' }]}>
+                        <Text style={styles.authorIcon}>{item.likes >= 10 ? "👑" : "👨‍🍳"}</Text>
+                        <Text style={[styles.authorName, item.likes >= 10 && { color: '#000' }]}>{item.authorName}</Text>
+                      </View>
+                      {isFilterActive && matchCount > 0 && (
+                        <View style={styles.matchBadge}>
+                          <Text style={styles.matchBadgeText}>보유 재료 {matchCount}개 포함</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.cardDate}>{formatDate(item.createdAt)}</Text>
+                  </View>
+                  <Text style={styles.cardTitle} numberOfLines={2}>{extractTitle(item.content)}</Text>
+                  <Text style={styles.cardPreview} numberOfLines={3}>{item.content.replace(/#/g, '').replace(/\*/g, '').trim()}</Text>
+                </TouchableOpacity>
+                
+                <View style={styles.cardFooter}>
+                  <TouchableOpacity style={styles.likeBtn} onPress={() => handleLike(item.id)}>
+                    <Text style={styles.likeIcon}>❤️</Text>
+                    <Text style={styles.likeCount}>{item.likes || 0}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => handleRecipeClick(item)}>
+                    <Text style={styles.readMoreText}>레시피 보기 →</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          }}
         />
       )}
 
-      {/* 상세 보기 바텀 모달 (내 주방과 동일한 UI) */}
+      {/* 레시피 상세 & 스크랩/TTS 모달 */}
       <Modal visible={modalVisible} transparent={true} animationType="slide" onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -147,10 +311,84 @@ export default function PlazaScreen() {
               </TouchableOpacity>
             </View>
             
+            <TouchableOpacity style={styles.ttsStartBtn} onPress={startCookingMode}>
+              <Text style={styles.ttsStartBtnText}>🔊 화면 안 보고 귀로 듣기 (조리 모드)</Text>
+            </TouchableOpacity>
+            
             <ScrollView showsVerticalScrollIndicator={false} style={styles.markdownScroll}>
               {selectedRecipe && <Markdown style={markdownStyles}>{selectedRecipe.content}</Markdown>}
-              <View style={{height: 40}}/>
+              <View style={{height: 20}}/>
             </ScrollView>
+            
+            <TouchableOpacity style={styles.scrapBtn} onPress={handleScrap}>
+              <Text style={styles.scrapBtnText}>📥 내 주방으로 스크랩하기</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.shoppingBtn} onPress={() => setShoppingModalVisible(true)}>
+              <Text style={styles.shoppingBtnText}>🛒 부족한 재료 온라인 검색</Text>
+            </TouchableOpacity>
+            <View style={{height: 40}}/>
+          </View>
+        </View>
+      </Modal>
+
+      {/* PRO 결제 유도 모달 */}
+      <Modal visible={proModalVisible} transparent={true} animationType="fade">
+        <View style={styles.proModalOverlay}>
+          <View style={styles.proModalContent}>
+            <Text style={styles.proTitle}>Cookdex PRO 👑</Text>
+            <Text style={styles.proSubTitle}>오늘의 광장 열람 횟수를 모두 사용하셨습니다!</Text>
+            <View style={styles.proBenefitBox}>
+              <Text style={styles.proBenefitText}>✅ 전 세계 레시피 무제한 열람</Text>
+              <Text style={styles.proBenefitText}>✅ AI 식재료 스캐너 무제한 사용</Text>
+              <Text style={styles.proBenefitText}>✅ 앱 내 모든 광고 완벽 제거</Text>
+            </View>
+            <TouchableOpacity style={styles.proSubscribeBtn} onPress={() => { Alert.alert("결제 연동 필요", "추후 인앱 결제 모듈이 연동됩니다."); setIsProUser(true); setProModalVisible(false); setPlazaViewsLeft(999); }}>
+              <Text style={styles.proSubscribeBtnText}>월 4,900원으로 무제한 즐기기</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setProModalVisible(false)} style={styles.proCancelBtn}>
+              <Text style={styles.proCancelBtnText}>내일 다시 올게요</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* TTS 전체화면 모달 */}
+      <Modal visible={isCookingMode} transparent={false} animationType="slide">
+        <SafeAreaView style={styles.ttsContainer}>
+          <View style={styles.ttsHeader}>
+            <Text style={styles.ttsStepIndicator}>조리 단계 {currentStepIndex + 1} / {cookingSteps.length}</Text>
+            <TouchableOpacity onPress={handleExitCookingMode} style={styles.ttsCloseBtn}><Text style={styles.ttsCloseBtnText}>종료 ✕</Text></TouchableOpacity>
+          </View>
+          <View style={styles.ttsBody}><Text style={styles.ttsBigText}>{cookingSteps[currentStepIndex]}</Text></View>
+          <View style={styles.ttsControls}>
+            <TouchableOpacity style={[styles.ttsBtn, currentStepIndex === 0 && {opacity: 0.3}]} onPress={handlePrevStep} disabled={currentStepIndex === 0}><Text style={styles.ttsBtnText}>⬅️ 이전</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.ttsBtnMain} onPress={handleReplayStep}><Text style={styles.ttsBtnMainText}>🔊 다시 듣기</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.ttsBtn, currentStepIndex === cookingSteps.length - 1 && {opacity: 0.3}]} onPress={handleNextStep} disabled={currentStepIndex === cookingSteps.length - 1}><Text style={styles.ttsBtnText}>다음 ➡️</Text></TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* 🛒 쇼핑 검색 모달 */}
+      <Modal visible={shoppingModalVisible} transparent={true} animationType="fade" onRequestClose={() => setShoppingModalVisible(false)}>
+        <View style={styles.shoppingModalOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setShoppingModalVisible(false)} />
+          <View style={styles.shoppingModalContent}>
+            <Text style={styles.shoppingTitle}>🛒 온라인 장보기</Text>
+            <Text style={styles.shoppingSub}>부족한 식재료를 온라인에서 바로 검색해 보세요.</Text>
+            
+            <TextInput 
+              style={styles.styleInput} 
+              placeholder="예: 대파, 양파, 돼지고기" 
+              placeholderTextColor="#A89F9C"
+              value={searchIngredient}
+              onChangeText={setSearchIngredient}
+              onSubmitEditing={handleShoppingSearch}
+            />
+            
+            <TouchableOpacity style={styles.shoppingSubmitBtn} onPress={handleShoppingSearch}>
+              <Text style={styles.shoppingSubmitBtnText}>온라인 마트 최저가 검색 🔍</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -159,7 +397,6 @@ export default function PlazaScreen() {
   );
 }
 
-// 기존 홈 화면/내 주방과 통일된 다크 테마 스타일
 const markdownStyles = StyleSheet.create({ 
   body: { color: '#3A2E2B', fontSize: 15, lineHeight: 24 }, 
   heading1: { color: '#FF8C00', fontSize: 22, fontWeight: 'bold' }, 
@@ -167,10 +404,12 @@ const markdownStyles = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#2A2421' }, // 다크 배경
-  header: { padding: 20, paddingTop: Platform.OS === 'android' ? 50 : 20, marginBottom: 10 },
+  container: { flex: 1, backgroundColor: '#2A2421' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: Platform.OS === 'android' ? 50 : 20, marginBottom: 10 },
   headerTitle: { fontSize: 26, fontWeight: '900', color: '#FFFDF9', marginBottom: 5 },
   headerSub: { fontSize: 14, color: '#A89F9C' },
+  limitBadge: { backgroundColor: '#4A3F3A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: '#FF8C00' },
+  limitBadgeText: { color: '#FFB347', fontSize: 12, fontWeight: 'bold' },
   
   centerBox: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   loadingText: { color: '#FF8C00', marginTop: 15, fontSize: 15, fontWeight: 'bold' },
@@ -195,12 +434,66 @@ const styles = StyleSheet.create({
   likeCount: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold' },
   readMoreText: { color: '#FF8C00', fontSize: 13, fontWeight: 'bold' },
 
-  // 상세 보기 모달 스타일 (내 주방과 유사하나 라이트 테마로 가독성 확보)
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalContent: { height: '85%', backgroundColor: '#FFFDF9', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -5 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 10 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#E8D5D0' },
   modalAuthor: { fontSize: 16, fontWeight: '900', color: '#8E24AA' },
   closeBtn: { backgroundColor: '#F5EBE7', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15 },
   closeBtnText: { color: '#3A2E2B', fontSize: 13, fontWeight: 'bold' },
-  markdownScroll: { flex: 1 }
+  markdownScroll: { flex: 1 },
+  
+  ttsStartBtn: { backgroundColor: '#E3F2FD', paddingVertical: 15, borderRadius: 15, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#CE93D8' }, 
+  ttsStartBtnText: { color: '#8E24AA', fontSize: 15, fontWeight: '900' },
+  scrapBtn: { backgroundColor: '#4CAF50', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginTop: 15 },
+  scrapBtnText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+
+  proModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 20 },
+  proModalContent: { backgroundColor: '#2A2421', borderRadius: 24, padding: 25, borderWidth: 1, borderColor: '#FF8C00', alignItems: 'center', shadowColor: '#FF8C00', shadowOffset: {width:0, height:0}, shadowOpacity: 0.5, shadowRadius: 20, elevation: 15 },
+  proTitle: { fontSize: 26, fontWeight: '900', color: '#FF8C00', marginBottom: 10 },
+  proSubTitle: { fontSize: 14, color: '#FFFDF9', textAlign: 'center', marginBottom: 20, fontWeight: 'bold' },
+  proBenefitBox: { backgroundColor: '#3A322F', padding: 15, borderRadius: 12, width: '100%', marginBottom: 25 },
+  proBenefitText: { color: '#E8D5D0', fontSize: 13, marginBottom: 8, fontWeight: 'bold' },
+  proSubscribeBtn: { backgroundColor: '#FF8C00', paddingVertical: 16, width: '100%', borderRadius: 16, alignItems: 'center', marginBottom: 12 },
+  proSubscribeBtnText: { color: '#000', fontSize: 16, fontWeight: '900' },
+  proCancelBtn: { paddingVertical: 10 },
+  proCancelBtnText: { color: '#A89F9C', fontSize: 13, fontWeight: 'bold', textDecorationLine: 'underline' },
+
+  ttsContainer: { flex: 1, backgroundColor: '#2A2421', padding: 20, justifyContent: 'space-between' }, 
+  ttsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 }, 
+  ttsStepIndicator: { color: '#FFB347', fontSize: 18, fontWeight: 'bold' }, 
+  ttsCloseBtn: { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 20 }, 
+  ttsCloseBtnText: { color: '#fff', fontWeight: 'bold' }, 
+  ttsBody: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10 }, 
+  ttsBigText: { color: '#FFFDF9', fontSize: 32, fontWeight: '900', textAlign: 'center', lineHeight: 45 }, 
+  ttsControls: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 }, 
+  ttsBtn: { backgroundColor: '#4A3F3A', paddingVertical: 20, flex: 1, borderRadius: 20, alignItems: 'center', marginHorizontal: 5 }, 
+  ttsBtnText: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold' }, 
+  ttsBtnMain: { backgroundColor: '#FF8C00', paddingVertical: 25, flex: 1.5, borderRadius: 25, alignItems: 'center', marginHorizontal: 5, shadowColor: '#FF8C00', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 }, 
+  ttsBtnMainText: { color: '#fff', fontSize: 18, fontWeight: '900' },
+  filterContainer: { paddingHorizontal: 20, marginBottom: 15 },
+  filterBtn: { backgroundColor: '#3A322F', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: '#5A4E49', alignSelf: 'flex-start' },
+  filterBtnActive: { backgroundColor: '#FF8C00', borderColor: '#FF8C00' },
+  filterBtnText: { color: '#A89F9C', fontSize: 13, fontWeight: 'bold' },
+  filterBtnTextActive: { color: '#000', fontSize: 13, fontWeight: '900' },
+  matchBadge: { backgroundColor: '#4CAF50', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, marginLeft: 10 },
+  matchBadgeText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
+  shoppingBtn: { backgroundColor: '#0073E9', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginTop: 10 },
+  shoppingBtnText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  shoppingModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  shoppingModalContent: { backgroundColor: '#3A322F', borderRadius: 24, padding: 25, borderWidth: 1, borderColor: '#0073E9', position: 'relative', width: '90%' },
+  shoppingTitle: { fontSize: 22, fontWeight: '900', color: '#0073E9', marginBottom: 10, textAlign: 'center' },
+  shoppingSub: { fontSize: 14, color: '#FFFDF9', textAlign: 'center', marginBottom: 20 },
+  styleInput: { backgroundColor: '#2A2421', color: '#FFFDF9', borderRadius: 12, padding: 15, fontSize: 16, borderWidth: 1, borderColor: '#5A4E49', marginBottom: 20 },
+  shoppingSubmitBtn: { backgroundColor: '#0073E9', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginBottom: 12 },
+  shoppingSubmitBtnText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  rankingSection: { marginBottom: 20, paddingTop: 10 },
+  rankingTitle: { fontSize: 20, fontWeight: '900', color: '#FFD700', marginBottom: 15, paddingHorizontal: 20 },
+  rankingScroll: { gap: 15, paddingHorizontal: 20, paddingBottom: 10 },
+  rankingCard: { backgroundColor: '#3A322F', padding: 15, borderRadius: 16, width: 160, borderWidth: 1, borderColor: '#FFD700', shadowColor: '#FFD700', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 5, elevation: 6 },
+  rankingBadge: { position: 'absolute', top: -10, left: 10, backgroundColor: '#000', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: '#FFD700' },
+  rankingBadgeText: { color: '#FFD700', fontSize: 12, fontWeight: '900' },
+  rankingAuthor: { color: '#FFFDF9', fontSize: 12, fontWeight: 'bold', marginTop: 10, marginBottom: 5 },
+  rankingRecipeTitle: { color: '#FF8C00', fontSize: 16, fontWeight: '900', marginBottom: 10 },
+  rankingLikeBox: { backgroundColor: '#2A2421', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  rankingLikeIcon: { color: '#E8D5D0', fontSize: 12, fontWeight: 'bold' }
 });
