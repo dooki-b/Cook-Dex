@@ -2,4 +2,8 @@ node_modules/
 .expo/
 android/
 ios/
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+
+# API 키 등 비공개 환경 변수 (공동작업자에게 노출되지 않도록 절대 커밋하지 않음)
+.env
+.env.local
+.env.*.local
