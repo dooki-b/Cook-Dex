@@ -36,7 +36,8 @@
           "cameraPermission": "Cook-Dex(쿡덱스)가 식재료를 스캔하기 위해 카메라 접근 권한이 필요합니다.",
           "microphonePermission": "동영상 레시피 기록 등을 위해 마이크 접근 권한이 필요합니다."
         }
-      ]
+      ],
+      "@react-native-voice/voice"
     ],
     "extra": {
       "eas": {}

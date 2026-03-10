@@ -1,12 +1,15 @@
-import { Tabs } from 'expo-router';
+import { Tabs, useRouter } from 'expo-router';
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword } from 'firebase/auth';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { auth } from '../../firebaseConfig';
+import { Colors, Radius, Shadows } from '../../constants/design-tokens';
 
 export default function TabLayout() {
-  const insets = useSafeAreaInsets(); // 기기별 하단 시스템 바 높이 자동 계산
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [isInitializing, setIsInitializing] = useState(true);
   const [user, setUser] = useState(null);
   
@@ -48,7 +51,11 @@ export default function TabLayout() {
   };
 
   if (isInitializing) {
-    return <View style={styles.loadingContainer}><ActivityIndicator size="large" color="#FF8C00" /></View>;
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+      </View>
+    );
   }
 
   // 🚨 유저가 없으면 앱 전체를 다크 테마 로그인 화면으로 덮어버림 (강제 차단)
@@ -56,21 +63,36 @@ export default function TabLayout() {
     return (
       <SafeAreaView style={styles.authContainer}>
         <View style={styles.authContent}>
-          <Text style={styles.authTitle}>Cookdex 👨‍🍳</Text>
+          <Text style={styles.authTitle}>Cookdex</Text>
           <Text style={styles.authSubTitle}>당신만의 AI 수석 셰프를 만나보세요</Text>
           
           <View style={styles.authInputBox}>
-            <TextInput style={styles.authInput} placeholder="이메일 주소" placeholderTextColor="#A89F9C" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
-            <TextInput style={styles.authInput} placeholder="비밀번호 (6자리 이상)" placeholderTextColor="#A89F9C" secureTextEntry value={password} onChangeText={setPassword} />
+            <TextInput
+              style={styles.authInput}
+              placeholder="이메일 주소"
+              placeholderTextColor={Colors.textSub}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              value={email}
+              onChangeText={setEmail}
+            />
+            <TextInput
+              style={styles.authInput}
+              placeholder="비밀번호 (6자리 이상)"
+              placeholderTextColor={Colors.textSub}
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
             
             {isLoginLoading ? (
-              <ActivityIndicator size="large" color="#FF8C00" style={{marginVertical: 15}} />
+              <ActivityIndicator size="large" color={Colors.primary} style={{ marginVertical: 15 }} />
             ) : (
               <View style={styles.authBtnRow}>
-                <TouchableOpacity style={[styles.authBtn, {backgroundColor: '#5A4E49'}]} onPress={handleSignUp}>
+                <TouchableOpacity style={[styles.authBtn, styles.authBtnSecondary]} onPress={handleSignUp}>
                   <Text style={styles.authBtnText}>이메일 가입</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.authBtn, {backgroundColor: '#FF8C00'}]} onPress={handleLogin}>
+                <TouchableOpacity style={[styles.authBtn, styles.authBtnPrimary]} onPress={handleLogin}>
                   <Text style={styles.authBtnText}>로그인</Text>
                 </TouchableOpacity>
               </View>
@@ -83,14 +105,14 @@ export default function TabLayout() {
             <View style={styles.dividerLine} />
           </View>
 
-          <TouchableOpacity style={[styles.socialBtn, {backgroundColor: '#fff'}]} onPress={() => handleSocialMock("Google")}>
-            <Text style={[styles.socialBtnText, {color: '#000'}]}>Google로 계속하기</Text>
+          <TouchableOpacity style={[styles.socialBtn, styles.socialBtnGoogle]} onPress={() => handleSocialMock("Google")}>
+            <Text style={[styles.socialBtnText, styles.socialBtnTextDark]}>Google로 계속하기</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.socialBtn, {backgroundColor: '#FEE500'}]} onPress={() => handleSocialMock("Kakao")}>
-            <Text style={[styles.socialBtnText, {color: '#000'}]}>카카오로 계속하기</Text>
+          <TouchableOpacity style={[styles.socialBtn, styles.socialBtnKakao]} onPress={() => handleSocialMock("Kakao")}>
+            <Text style={[styles.socialBtnText, styles.socialBtnTextDark]}>카카오로 계속하기</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.socialBtn, {backgroundColor: '#000', borderColor: '#4A3F3A', borderWidth: 1}]} onPress={() => handleSocialMock("Apple")}>
-            <Text style={[styles.socialBtnText, {color: '#fff'}]}>Apple로 계속하기</Text>
+          <TouchableOpacity style={[styles.socialBtn, styles.socialBtnApple]} onPress={() => handleSocialMock("Apple")}>
+            <Text style={[styles.socialBtnText, styles.socialBtnTextLight]}>Apple로 계속하기</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -104,8 +126,8 @@ export default function TabLayout() {
       backBehavior="history"
       screenOptions={{ 
       headerShown: false, 
-      tabBarActiveTintColor: '#FF8C00', 
-      tabBarInactiveTintColor: '#A89F9C',
+      tabBarActiveTintColor: Colors.primary, 
+      tabBarInactiveTintColor: Colors.textSub,
       tabBarShowLabel: true,
       tabBarLabelStyle: { fontSize: 11, fontWeight: 'bold', paddingBottom: 5 },
       tabBarHideOnKeyboard: true,
@@ -118,30 +140,59 @@ export default function TabLayout() {
         }
       ]
     }}>
-      
-      {/* 1. 좌측 탭: 요리 광장 */}
-      <Tabs.Screen name="plaza" options={{ title: '요리 광장', tabBarIcon: ({color}) => <Text style={{fontSize: 20, color}}>🌍</Text> }} />
-      
-      {/* 2. 중앙 거대 플로팅 홈 버튼 */}
-      <Tabs.Screen 
-        name="index" 
-        options={{ 
-          title: '홈', 
-          tabBarIcon: () => (
-            <View style={styles.homeBtnWrapper}>
-              <View style={styles.homeBtn}>
-                <Text style={{fontSize: 34}}>🏠</Text>
-              </View>
+      {/* 1. 홈 */}
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: '홈',
+          tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
+        }}
+      />
+      {/* 2. 요리 광장 */}
+      <Tabs.Screen
+        name="plaza"
+        options={{
+          title: '요리 광장',
+          tabBarIcon: ({ color, size }) => <Ionicons name="restaurant-outline" size={size} color={color} />,
+        }}
+      />
+      {/* 3. 레시피 제작 (가운데 FAB → /create-recipe) */}
+      <Tabs.Screen
+        name="create"
+        options={{
+          title: '레시피 제작',
+          tabBarButton: (props) => (
+            <View style={styles.centerFabWrapper}>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.centerFab}
+                onPress={() => router.push('/create-recipe')}
+              >
+                <Ionicons name="add" size={28} color={Colors.textInverse} />
+                <Text style={styles.centerFabLabel}>레시피 제작</Text>
+              </TouchableOpacity>
             </View>
           ),
-          tabBarLabel: () => null,
-        }} 
+        }}
       />
-      
-      {/* 3. 우측 탭: 프로필 */}
-      <Tabs.Screen name="profile" options={{ title: '내 정보', tabBarIcon: ({color}) => <Text style={{fontSize: 20, color}}>⚙️</Text> }} />
-      
-      {/* 🚨 홈 화면의 퀵 메뉴를 통해서만 진입할 수 있도록 하단 탭 바에서는 숨김 처리 (href: null) */}
+      {/* 4. 내 설정 */}
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: '내 설정',
+          tabBarIcon: ({ color, size }) => <Ionicons name="person-outline" size={size} color={color} />,
+        }}
+      />
+      {/* 5. 전체 메뉴 */}
+      <Tabs.Screen
+        name="menu"
+        options={{
+          title: '전체 메뉴',
+          tabBarIcon: ({ color, size }) => <Ionicons name="menu-outline" size={size} color={color} />,
+        }}
+      />
+      {/* 탭 바에 숨김: 전체 메뉴에서만 진입 */}
+      <Tabs.Screen name="benefits" options={{ href: null }} />
       <Tabs.Screen name="recipes" options={{ href: null }} />
       <Tabs.Screen name="quest" options={{ href: null }} />
       <Tabs.Screen name="ranking" options={{ href: null }} />
@@ -150,55 +201,182 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: { flex: 1, backgroundColor: '#2A2421', justifyContent: 'center', alignItems: 'center' },
-  authContainer: { flex: 1, backgroundColor: '#2A2421' },
-  authContent: { flex: 1, justifyContent: 'center', padding: 30 },
-  authTitle: { fontSize: 40, fontWeight: '900', color: '#FF8C00', textAlign: 'center', marginBottom: 10 },
-  authSubTitle: { fontSize: 16, color: '#FFFDF9', textAlign: 'center', marginBottom: 40, fontWeight: 'bold' },
-  authInputBox: { marginBottom: 30 },
-  authInput: { backgroundColor: '#3A322F', color: '#FFFDF9', borderWidth: 1, borderColor: '#4A3F3A', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 16, fontSize: 16, marginBottom: 12 },
-  authBtnRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
-  authBtn: { flex: 1, paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
-  authBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  dividerBox: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: '#4A3F3A' },
-  dividerText: { color: '#8C7A76', paddingHorizontal: 15, fontSize: 13, fontWeight: 'bold' },
-  socialBtn: { paddingVertical: 16, borderRadius: 12, alignItems: 'center', marginBottom: 12 },
-  socialBtnText: { fontSize: 16, fontWeight: 'bold' },
-  
-  tabBar: { 
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  authContainer: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
+  },
+  authContent: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 30,
+  },
+  authTitle: {
+    fontSize: 40,
+    fontWeight: '900',
+    color: Colors.primary,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  authSubTitle: {
+    fontSize: 16,
+    color: Colors.textMain,
+    textAlign: 'center',
+    marginBottom: 40,
+    fontWeight: 'bold',
+  },
+  authInputBox: {
+    marginBottom: 30,
+  },
+  authInput: {
+    backgroundColor: Colors.bgElevated,
+    color: Colors.textMain,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: 15,
+    paddingVertical: 16,
+    fontSize: 16,
+    marginBottom: 12,
+  },
+  authBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  authBtn: {
+    flex: 1,
+    paddingVertical: 16,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+  },
+  authBtnPrimary: {
+    backgroundColor: Colors.primary,
+    ...Shadows.glow,
+  },
+  authBtnSecondary: {
+    backgroundColor: Colors.bgElevated,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  authBtnText: {
+    color: Colors.textInverse,
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  dividerBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.border,
+  },
+  dividerText: {
+    color: Colors.textSub,
+    paddingHorizontal: 15,
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  socialBtn: {
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    marginBottom: 12,
+    borderWidth: 1,
+  },
+  socialBtnGoogle: {
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(0,0,0,0.08)',
+  },
+  socialBtnKakao: {
+    backgroundColor: '#FEE500',
+    borderColor: 'rgba(0,0,0,0.08)',
+  },
+  socialBtnApple: {
+    backgroundColor: '#000000',
+    borderColor: Colors.borderStrong,
+  },
+  socialBtnText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  socialBtnTextDark: {
+    color: '#000000',
+  },
+  socialBtnTextLight: {
+    color: '#FFFFFF',
+  },
+
+  tabBar: {
     position: 'absolute',
     left: 0,
     right: 0,
-    backgroundColor: '#3A322F', 
-    borderTopLeftRadius: 30, // 레퍼런스처럼 상단 모서리만 둥글게
-    borderTopRightRadius: 30,
-    borderTopWidth: 0, 
-    paddingTop: 5, // 상단 패딩을 줄여서 전체적으로 내려가게 함
+    backgroundColor: Colors.bgElevated,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    borderTopWidth: 0,
+    paddingTop: 5,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 }, // 그림자를 위쪽으로 쏴서 입체감 부여
+    shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.3,
     shadowRadius: 10,
-    elevation: 15, // 안드로이드 겹침 방지 및 강한 그림자
+    elevation: 15,
   },
   homeBtnWrapper: {
     justifyContent: 'center',
     alignItems: 'center',
-    top: -20, // 버튼 위치를 살짝 아래로 조정
+    top: -20,
   },
   homeBtn: {
-    width: 76, // 크기 확대
+    width: 76,
     height: 76,
     borderRadius: 38,
-    backgroundColor: '#FF8C00',
+    backgroundColor: Colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 4,
-    borderColor: '#2A2421', // 뒷배경과 어우러지게 분리선 부여
-    shadowColor: '#FF8C00',
+    borderColor: Colors.bgMain,
+    shadowColor: Colors.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 5,
     elevation: 6,
+  },
+  centerFabWrapper: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    top: -18,
+  },
+  centerFab: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: Colors.bgElevated,
+    ...Shadows.glow,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  centerFabLabel: {
+    position: 'absolute',
+    bottom: -18,
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.primary,
   },
 });

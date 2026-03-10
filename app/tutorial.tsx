@@ -35,7 +35,6 @@ export default function TutorialScreen() {
         {/* STEP 1: 기능 안내 */}
         {step === 1 && (
           <View style={styles.stepBox}>
-            <Text style={styles.stepIcon}>📸</Text>
             <Text style={styles.stepTitle}>AI 카메라로 식재료 스캔</Text>
             <Text style={styles.stepDesc}>
               냉장고 속 남은 재료를 찍기만 하세요.{"\n"}
@@ -48,8 +47,7 @@ export default function TutorialScreen() {
         {/* STEP 2: 게이미피케이션 안내 */}
         {step === 2 && (
           <View style={styles.stepBox}>
-            <Text style={styles.stepIcon}>📜</Text>
-            <Text style={styles.stepTitle}>도파민 뿜뿜! 요리 미션</Text>
+            <Text style={styles.stepTitle}>요리 미션</Text>
             <Text style={styles.stepDesc}>
               매일 주어지는 미션을 달성하고{"\n"}
               경험치(EXP)를 쌓아 '마스터 셰프'가 되어보세요.{"\n"}
@@ -61,8 +59,7 @@ export default function TutorialScreen() {
         {/* STEP 3: 법적 면책 동의 (가장 중요) */}
         {step === 3 && (
           <View style={styles.stepBox}>
-            <Text style={styles.stepIcon}>⚖️</Text>
-            <Text style={styles.stepTitle}>안전 및 위생 면책 동의</Text>
+            <Text style={styles.stepTitle}>안전 및 위생 안내</Text>
             <View style={styles.disclaimerBox}>
               <Text style={styles.disclaimerText}>
                 [필수 고지 사항]{"\n\n"}

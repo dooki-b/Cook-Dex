@@ -304,11 +304,14 @@ export default function ScannerScreen() {
       const imageParts = photos.map(photo => ({ inline_data: { mime_type: "image/jpeg", data: photo.base64 } }));
       const systemPrompt = `너는 최고의 셰프 '쿡덱스'야. 사진을 분석하고 유저가 추가한 [수동 재료: ${manualIngredients.join(', ')}]를 합쳐서 3가지 요리 테마를 제안해.${userContextPrompt}
       ${customStyleStr ? `[희망 요리 스타일: ${customStyleStr}]` : ''}
-      과일(귤, 사과), 빵, 간식 등 사람이 먹을 수 있는게 하나라도 있으면 무조건 요리로 인정해.
+      
+      ⚠️ 중요 규칙:
+      1. [수동 재료]에 있는 항목은 사진 분석 결과보다 **최우선 순위**로 둬서 반드시 요리에 포함시켜. (유저가 직접 확인한 재료임)
+      2. 사진 속 물체나 입력된 재료 중 '먹을 수 없는 것(비식재료)'이 있다면 반드시 "invalid_items" 배열에 포함시켜.
+      3. 과일, 빵, 간식 등 사람이 먹을 수 있는게 하나라도 있으면 무조건 요리로 인정해.
+      
       만약 사진에 식재료가 아예 없다면 "status": "NO_FOOD" 라고 반환해. 식재료가 있다면 "status": "SUCCESS" 로 반환해.
       
-      ⚠️ 중요: 사진 속 물체나 입력된 재료 중 '먹을 수 없는 것(비식재료, 예: 물티슈, 그릇, 사람, 스마트폰 등)'이 있다면 반드시 "invalid_items" 배열에 포함시켜.
-
       오직 아래 JSON 스키마를 100% 준수해라.
       { 
         "status": "SUCCESS 또는 NO_FOOD",
@@ -319,12 +322,25 @@ export default function ScannerScreen() {
       
       const parsedData = await callGeminiAPI(systemPrompt, imageParts);
 
-      if (parsedData.status === "NO_FOOD") throw new Error("NO_FOOD_DETECTED");
+      // 🚨 [수정] 수동 재료가 있다면, 사진이 NO_FOOD여도 강제로 진행 (유저 의도 우선)
+      if (parsedData.status === "NO_FOOD") {
+        if (manualIngredients.length > 0) {
+           // 수동 재료가 있으면 detected_ingredients를 수동 재료로 채우고 진행
+           if (!parsedData.detected_ingredients || parsedData.detected_ingredients.length === 0) {
+             parsedData.detected_ingredients = [...manualIngredients];
+           }
+        } else {
+           throw new Error("NO_FOOD_DETECTED");
+        }
+      }
 
       if (parsedData.invalid_items && parsedData.invalid_items.length > 0) {
-        Alert.alert("🚨 식재료가 아닙니다!", `다음 항목은 요리에 사용할 수 없습니다:\n\n👉 ${parsedData.invalid_items.join(', ')}\n\n식재료를 촬영하거나 기입해주세요.`);
-        setAppStep('camera'); setIsCurating(false); setIsAnalyzing(false);
-        return;
+        // 🚨 [수정] 수동 재료가 있다면, invalid_items(사진 속 비식재료 등)가 있어도 무시하고 진행
+        if (manualIngredients.length === 0) {
+          Alert.alert("🚨 식재료가 아닙니다!", `다음 항목은 요리에 사용할 수 없습니다:\n\n👉 ${parsedData.invalid_items.join(', ')}\n\n식재료를 촬영하거나 기입해주세요.`);
+          setAppStep('camera'); setIsCurating(false); setIsAnalyzing(false);
+          return;
+        }
       }
 
       // 🚨 [신규] 분석 성공 시 횟수 차감
@@ -337,6 +353,15 @@ export default function ScannerScreen() {
       setCurrentIngredients(parsedData.detected_ingredients || []);
       setCurationThemes(parsedData.curation_themes.slice(0, 3));
       setIsCurating(false); setIsAnalyzing(false);
+
+      // 홈 "나에게 맞는 테마"에서 진입한 경우: 재료 확정 후 AI 레시피 생성으로 넘김
+      const themeKeyword = Array.isArray(params.themeKeyword) ? params.themeKeyword[0] : params.themeKeyword;
+      if (themeKeyword && parsedData.detected_ingredients?.length) {
+        router.replace({
+          pathname: '/create-recipe',
+          params: { directStyle: themeKeyword, directIngredients: parsedData.detected_ingredients.join(',') },
+        });
+      }
     } catch (error) { 
       // API Key 문제면 플랜 B 없이 즉시 배출 (결번 에러 방지용)
       if (error.message.includes("429") || error.message.includes("API 키") || error.message.includes("404")) {
@@ -386,6 +411,10 @@ export default function ScannerScreen() {
       const userContextPrompt = `\n\n--- 👨‍🍳 셰프 맞춤 설정 ---\n${dietText}\n${allergyText}\n${condimentsText}\n----------------------\n`;
       // ---------------------------------
       const systemPrompt = `너는 셰프야. 재료(${currentIngredients.join(', ')})를 가지고 [${theme.theme_title}] 레시피를 작성해.${userContextPrompt}\n⚠️ 필수 지시사항: 1인분 기준 총 칼로리(kcal)와 영양성분을 정확히 계산하여 상단에 표기해.
+      
+      ⚠️ 중요: 상표권 방어를 위해 레시피 내에 특정 기업의 브랜드명(예: 스팸, 오뚜기 카레 등)은 절대 사용하지 말고, 반드시 '통조림 햄', '카레 가루' 등 일반 명사로 대체할 것.
+      ⚠️ 중요: 마크다운 최하단에는 반드시 다음 안내 문구를 정확히 포함시킬 것: "\n\n---\n*※ 본 레시피의 영양 정보 및 조리법은 AI가 추정한 결과로, 실제 식재료의 상태나 조리 환경에 따라 다를 수 있습니다. 위생 및 안전에 유의하여 조리해 주십시오.*"
+
       오직 JSON 형식으로 대답해.
       { 
         "safety_warning": "위생 경고 필요시 작성, 없으면 null", 
@@ -424,34 +453,61 @@ export default function ScannerScreen() {
   };
 
   const submitTrainingData = async () => {
-    if (!trainingInput.trim()) { Alert.alert("알림", "식재료 이름을 입력해주세요."); return; }
+    const inputTerm = trainingInput.trim();
+    if (!inputTerm) { Alert.alert("알림", "식재료 이름을 입력해주세요."); return; }
+    
+    // 🚨 [신규 로직] 1. 텍스트 비식재료 AI 사전 검증 (경고창 띄우기)
+    try {
+      setIsAnalyzing(true); 
+      const checkPrompt = `단어 "${inputTerm}"이(가) 사람이 먹을 수 있는 식재료인지 판단해. 
+      먹을 수 있다면 {"is_food": true}, 먹을 수 없다면(가구, 전자제품, 독극물, 비속어 등) {"is_food": false, "reason": "이유"} 로 JSON 응답해.`;
+      
+      const checkResult = await callGeminiAPI(checkPrompt);
+      setIsAnalyzing(false);
+
+      if (checkResult && checkResult.is_food === false) {
+        Alert.alert("🚨 등록 불가 (비식재료)", `"${inputTerm}"은(는) 식재료가 아닌 것으로 판단됩니다.\n\n사유: ${checkResult.reason}\n\n정확한 식재료 명칭을 입력해주세요.`);
+        return;
+      }
+    } catch (e) {
+      setIsAnalyzing(false);
+    }
     
     // 1. 로컬 상태 업데이트 (사진 라벨링)
     setPhotos(prev => {
       const newPhotos = [...prev];
       if (selectedPhotoIndex !== null && newPhotos[selectedPhotoIndex]) {
-        newPhotos[selectedPhotoIndex] = { ...newPhotos[selectedPhotoIndex], label: trainingInput.trim() };
+        newPhotos[selectedPhotoIndex] = { ...newPhotos[selectedPhotoIndex], label: inputTerm };
       }
       return newPhotos;
     });
 
-    // 2. 수동 재료 리스트에도 추가 (AI가 인식할 수 있도록)
-    if(!manualIngredients.includes(trainingInput.trim())) {
-      setManualIngredients(prev => [...new Set([...prev, trainingInput.trim()])]);
+    // 🚨 [신규 로직] 2. 유저가 기입한 재료는 우선적으로 AI 레시피 생성에 강제 포함 (수동 리스트 추가)
+    if(!manualIngredients.includes(inputTerm)) {
+      setManualIngredients(prev => [...new Set([...prev, inputTerm])]);
     }
 
+    // 🚨 [신규 로직] 3. 다수결 찬/반 투표 시스템으로 데이터 전송
     Alert.alert(
-      "🚨 [경고] 데이터 제출 동의", 
-      "유저 다수결 검증을 통해 허위/장난 정보(비식재료 등)를 고의로 학습시키려 한 정황이 파악될 경우, 심사 반려, 앱 이용 제한 및 조치를 당할 수 있습니다.\n\n해당 식재료를 제출하시겠습니까?",
+      "🗳️ 데이터 심사 제출", 
+      "제출된 사진과 이름은 '유저 다수결 투표' 퀘스트로 이동합니다.\n\n과반수 찬성을 받으면 정식 데이터로 등록되고 보상(EXP)이 지급됩니다!\n\n제출하시겠습니까?",
       [
         { text: "취소", style: "cancel" },
         { text: "동의 및 제출", style: "destructive", onPress: async () => {
             try {
               const currentUser = auth.currentUser;
               if (currentUser) {
-                await addDoc(collection(db, "ai_training_data"), { imageUrl: "base64_data_omitted", proposedName: trainingInput, category: "UserLabel", submittedBy: currentUser.uid, status: "pending_votes", voteCount: 1, createdAt: new Date().toISOString() });
+                await addDoc(collection(db, "ai_training_data"), { 
+                  imageUrl: "base64_data_omitted", 
+                  proposedName: inputTerm, 
+                  category: "UserLabel", 
+                  submittedBy: currentUser.uid, 
+                  status: "pending_votes", // 투표 대기 상태
+                  voteCount: 0, 
+                  createdAt: new Date().toISOString() 
+                });
 
-                Alert.alert("제출 완료! 🎉", "AI 학습 데이터로 소중하게 쓰입니다. 심사 통과 이후 EXP가 지급됩니다!");
+                Alert.alert("제출 완료! 🎉", "심사 대기열에 등록되었습니다. 투표 결과에 따라 알림이 전송됩니다.");
                 setShowTrainingModal(false);
               }
             } catch (error) { Alert.alert("에러", "제출에 실패했습니다."); }

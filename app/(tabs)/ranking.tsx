@@ -8,10 +8,10 @@ import { auth, db } from '../../firebaseConfig';
 
 // 칭호 계산기 (index.tsx와 동일한 로직)
 const calculateLevel = (exp) => {
-  if (exp < 30) return "🍳 쪼렙";
-  if (exp < 100) return "🔪 견습";
-  if (exp < 300) return "👨‍🍳 수석";
-  return "👑 마스터";
+  if (exp < 30) return "초급";
+  if (exp < 100) return "견습";
+  if (exp < 300) return "수석";
+  return "마스터";
 };
 
 export default function RankingScreen() {
@@ -108,8 +108,8 @@ export default function RankingScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>🏆 명예의 전당</Text>
-        <Text style={styles.headerSub}>글로벌 셰프들과 경험치를 겨뤄보세요!</Text>
+        <Text style={styles.headerTitle}>명예의 전당</Text>
+        <Text style={styles.headerSub}>글로벌 셰프들과 경험치를 겨뤄보세요</Text>
       </View>
 
       {/* 🚨 내 순위 고정 패널 (Sticky My Rank) */}

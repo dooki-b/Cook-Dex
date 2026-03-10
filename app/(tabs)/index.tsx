@@ -1,925 +1,1014 @@
-// 파일 위치: app/(tabs)/index.tsx
+// app/(tabs)/index.tsx — 레시피 포털 홈 (스퀴시·글래스·차세대 트렌드)
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
-import * as Speech from 'expo-speech';
-import { doc, increment, setDoc } from 'firebase/firestore';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, ImageBackground, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import Markdown from 'react-native-markdown-display';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, Dimensions, ImageBackground, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Colors, Radius, Shadows } from '../../constants/design-tokens';
-import { auth, db } from '../../firebaseConfig';
+import { ClayChipColors, Colors, GlassHighlight, Radius, Shadows } from '../../constants/design-tokens';
+import { auth } from '../../firebaseConfig';
 
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
-const DAILY_FREE_LIMIT = 5; 
-const RECIPE_TYPES = ["메인 디쉬 🍛", "디저트 🍰", "음료/칵테일 🍹", "간단한 간식 🍟", "술안주 🍻", "샐러드/다이어트 🥗"];
-const RECIPE_TASTES = ["매콤한 🔥", "단짠단짠 🍯🧂", "짭짤한 🧂", "자극적인 속세의 맛 😈", "담백하고 건강한 🌿", "따뜻한 국물 🍲"];
-const COMMON_INGREDIENTS = ["감자", "고구마", "양파", "대파", "마늘", "돼지고기", "소고기", "닭고기", "생선", "계란", "두부", "김치", "통조림 햄", "소면", "치즈", "우유"];
+// 히어로 버튼 배경 — 로컬 이미지 (채소·재료)
+const HERO_BG_IMAGE = require('../../assets/hero-bg-fresh-vegetables.png');
 
-const RECOMMENDED_THEMES = [
-  { id: '1', title: '비 오는 날 파전 🌧️', desc: '바삭바삭한 식감' },
-  { id: '2', title: '10분 컷 초간단 ⏱️', desc: '바쁜 아침에 딱!' },
-  { id: '3', title: '단백질 폭발 🥩', desc: '운동 직후 필수' },
-  { id: '4', title: '스트레스 킬러 🌶️', desc: '화끈하게 매운맛' },
-  { id: '5', title: '심야식당 안주 🍺', desc: '맥주가 땡길 때' }
+const SPRING_CONFIG = { damping: 14, stiffness: 400 };
+
+function Squishable({
+  onPress,
+  style,
+  fill,
+  children,
+}: { onPress: () => void; style?: object | object[]; fill?: boolean; children: React.ReactNode }) {
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+  return (
+    <Pressable
+      onPress={onPress}
+      onPressIn={() => { scale.value = withSpring(0.97, SPRING_CONFIG); }}
+      onPressOut={() => { scale.value = withSpring(1, SPRING_CONFIG); }}
+      style={style}
+    >
+      <Animated.View style={[fill && { flex: 1 }, animatedStyle]}>
+        {children}
+      </Animated.View>
+    </Pressable>
+  );
+}
+
+// 퀵 메뉴 칩 (클레이모피즘 아이콘 + 라벨)
+const QUICK_MENU = [
+  { id: 'mission', label: '미션', icon: 'flag-outline' as const, color: ClayChipColors.blue, onPress: 'quest' },
+  { id: 'kitchen', label: '내 주방', icon: 'restaurant-outline' as const, color: ClayChipColors.yellow, onPress: 'recipes' },
+  { id: 'sale', label: '할인정보', icon: 'pricetag-outline' as const, color: ClayChipColors.peach, onPress: 'benefits' },
 ];
 
-const windowHeight = Dimensions.get('window').height;
+// 테마 풀: 식단 목표·시간대에 따라 추천 조합용 + Unsplash 이미지
+const THEME_POOL: { id: string; title: string; keyword: string; imageUri: string; dietTags?: string[]; timeSlot?: 'morning' | 'lunch' | 'dinner' | 'late' }[] = [
+  { id: 'diet', title: '다이어트', keyword: '저칼로리 다이어트에 맞는', imageUri: 'https://images.unsplash.com/photo-1561043433-aaf687c4cf04?w=600', dietTags: ['다이어트(저칼로리)', '당뇨/혈당관리'] },
+  { id: 'lowcarb', title: '저탄고지', keyword: '저탄수화물 고지방', imageUri: 'https://images.unsplash.com/photo-1600891964092-4316c288032e?w=600&q=80', dietTags: ['저탄고지'] },
+  { id: 'vegan', title: '비건', keyword: '채식 비건', imageUri: 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=600', dietTags: ['비건(채식)'] },
+  { id: 'protein', title: '고단백', keyword: '고단백 벌크업', imageUri: 'https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?w=600', dietTags: ['벌크업(고단백)'] },
+  { id: 'morning', title: '간단 아침', keyword: '간단한 아침 식사', imageUri: 'https://images.unsplash.com/photo-1533089860892-a7c6f0a88666?w=600', timeSlot: 'morning' },
+  { id: 'lunch', title: '점심 한그릇', keyword: '점심 한그릇 요리', imageUri: 'https://images.unsplash.com/photo-1547592166-23ac45744acd?w=600', timeSlot: 'lunch' },
+  { id: 'dinner', title: '저녁 요리', keyword: '저녁 메인 요리', imageUri: 'https://images.unsplash.com/photo-1544025162-d76694265947?w=600', timeSlot: 'dinner' },
+  { id: 'late', title: '가벼운 야식', keyword: '가벼운 야식', imageUri: 'https://images.unsplash.com/photo-1747228469541-f0e7f56e7ec7?w=600', timeSlot: 'late' },
+  { id: '10min', title: '10분 요리', keyword: '10분 이내 간단 요리', imageUri: 'https://images.unsplash.com/photo-1551183053-bf91a1d81141?w=600' },
+  { id: 'onepot', title: '한 그릇', keyword: '한 그릇 요리', imageUri: 'https://images.unsplash.com/photo-1476124369491-e7addf5db371?w=600' },
+  { id: 'allergy', title: '알레르기 고려', keyword: '알레르기 유발 재료 제외', imageUri: 'https://images.unsplash.com/photo-1542814744-5f6b075c051c?w=600' },
+];
 
-const calculateLevel = (exp) => {
-  if (exp < 30) return { level: 1, title: "🍳 요리 쪼렙", nextExp: 30 };
-  if (exp < 100) return { level: 2, title: "🔪 견습 요리사", nextExp: 100 };
-  if (exp < 300) return { level: 3, title: "👨‍🍳 수석 셰프", nextExp: 300 };
-  return { level: 'MAX', title: "👑 마스터 셰프", nextExp: exp };
-};
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const THEME_CARD_WIDTH = SCREEN_WIDTH * 0.38;
+const THEME_CARD_MARGIN = 8;
+const THEME_CARD_SNAP = THEME_CARD_WIDTH + THEME_CARD_MARGIN;
 
-const extractJSON = (rawText) => {
-  try {
-    const start = rawText.indexOf('{');
-    const end = rawText.lastIndexOf('}');
-    if (start === -1 || end === -1) return null;
-    return JSON.parse(rawText.substring(start, end + 1));
-  } catch (e) { return null; }
-};
+// 테마 모달용 재료 칩 (일부만 노출)
+const THEME_MODAL_INGREDIENTS = ['감자', '양파', '대파', '마늘', '계란', '두부', '닭고기', '돼지고기', '김치', '소면', '치즈', '버섯', '당근', '콩나물', '베이컨', '참치캔'];
+
+function getTimeSlot(): 'morning' | 'lunch' | 'dinner' | 'late' {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 11) return 'morning';
+  if (h >= 11 && h < 14) return 'lunch';
+  if (h >= 17 && h < 21) return 'dinner';
+  return 'late';
+}
+
+type ThemeItem = (typeof THEME_POOL)[number];
+
+// 홈 화면 전용 레벨 계산 — 상한선 없이 계속 올라가도록 설계
+function calculateLevel(exp: number): { level: number; title: string; nextExp: number } {
+  const safeExp = Number.isFinite(exp) && exp > 0 ? exp : 0;
+
+  if (safeExp < 50) return { level: 1, title: '요리 초급', nextExp: 50 };
+  if (safeExp < 150) return { level: 2, title: '견습 요리사', nextExp: 150 };
+  if (safeExp < 500) return { level: 3, title: '수석 셰프', nextExp: 500 };
+
+  // 500 EXP 이후에는 200 EXP마다 레벨이 1씩 올라가는 구조 (예: 500=4레벨 시작)
+  const extraExp = safeExp - 500;
+  const extraLevels = Math.floor(extraExp / 200) + 1; // 1부터 시작
+  const level = 3 + extraLevels;
+  const nextExp = 500 + extraLevels * 200;
+
+  return { level, title: '마스터 셰프', nextExp };
+}
 
 export default function HomeScreen() {
   const router = useRouter();
-  const scrollViewRef = useRef(null);
-  const [inputBoxY, setInputBoxY] = useState(0);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-
-  const [scansLeft, setScansLeft] = useState(DAILY_FREE_LIMIT);
+  const [userName, setUserName] = useState('셰프');
   const [userExp, setUserExp] = useState(0);
-  const [userName, setUserName] = useState("셰프");
-  const [userLevel, setUserLevel] = useState("초보 요리사 🍳");
-
-  const [ingredientSearch, setIngredientSearch] = useState("");
-  const [selectedIngredients, setSelectedIngredients] = useState([]); 
-  
-  const [showBottomModal, setShowBottomModal] = useState(false);
-  const [isCurating, setIsCurating] = useState(false);
-  const [curationThemes, setCurationThemes] = useState(null); 
-  const [isGeneratingRecipe, setIsGeneratingRecipe] = useState(false);
-  const [textRecipeResult, setTextRecipeResult] = useState(null);
-  const [shoppingList, setShoppingList] = useState([]);
-
-  const [showStyleModal, setShowStyleModal] = useState(false);
-  const [selectedType, setSelectedType] = useState("");
-  const [isCustomType, setIsCustomType] = useState(false);
-  const [customTypeInput, setCustomTypeInput] = useState("");
-  const [selectedTaste, setSelectedTaste] = useState("");
-  const [isCustomTaste, setIsCustomTaste] = useState(false);
-  const [customTasteInput, setCustomTasteInput] = useState("");
-
-  // 희망 요리 스타일 사전 질문
-  const [styleModalVisible, setStyleModalVisible] = useState(false);
-  const [preferredStyle, setPreferredStyle] = useState("");
-
-  // 🎁 행운의 룰렛 상태
-  const [rouletteVisible, setRouletteVisible] = useState(false);
-  const [isSpinning, setIsSpinning] = useState(false);
-  const [rouletteResult, setRouletteResult] = useState(null);
-  const [canSpinFree, setCanSpinFree] = useState(true);
-
-  // 무료 룰렛 가능 여부 체크
-  useFocusEffect(
-    useCallback(() => {
-      const checkRoulette = async () => {
-        try {
-          const lastSpin = await AsyncStorage.getItem('cookdex_roulette_date');
-          if (lastSpin === new Date().toLocaleDateString()) setCanSpinFree(false);
-          else setCanSpinFree(true);
-        } catch (e) {}
-      };
-      checkRoulette();
-    }, [])
-  );
-
-  // 룰렛 돌리기 실행 함수
-  const executeSpin = async () => {
-    setIsSpinning(true);
-    setRouletteResult(null);
-
-    // 2.5초간 룰렛이 돌아가는 연출(대기)
-    setTimeout(async () => {
-      const rand = Math.random() * 100;
-      let rewardName = "";
-      let rewardType = "";
-
-      if (rand < 1) { 
-        rewardName = "👑 [환상의 대박]\nPRO 1일 체험권\n(추후 식재료 50% 할인 쿠폰 연동)"; 
-        rewardType = "PRO"; 
-      }
-      else if (rand < 5) { 
-        rewardName = "🍀 [특별한 행운]\n히든 칭호 획득!\n(추후 무료 배송 쿠폰 연동)"; 
-        rewardType = "TITLE"; 
-      }
-      else if (rand < 20) { 
-        rewardName = "📸 [기분좋은 당첨]\nAI 스캔 3회 충전권\n(추후 1,000원 할인권 연동)"; 
-        rewardType = "SCAN"; 
-      }
-      else if (rand < 50) { 
-        rewardName = "🌟 [쏠쏠한 보상]\n요리 경험치 +100 EXP"; 
-        rewardType = "EXP_LARGE"; 
-      }
-      else { 
-        rewardName = "🍬 [소소한 행복]\n요리 경험치 +15 EXP"; 
-        rewardType = "EXP_SMALL"; 
-      }
-
-      // 보상 실제 지급(저장) 로직
-      if (rewardType.includes("EXP")) {
-        const expRaw = await AsyncStorage.getItem('cookdex_user_exp');
-        const addExp = rewardType === "EXP_LARGE" ? 100 : 15;
-        await AsyncStorage.setItem('cookdex_user_exp', ((expRaw ? parseInt(expRaw) : 0) + addExp).toString());
-      } else if (rewardType === "TITLE") {
-        const titlesRaw = await AsyncStorage.getItem('cookdex_unlocked_titles');
-        const titles = titlesRaw ? JSON.parse(titlesRaw) : ["🍳 요리 쪼렙"];
-        if (!titles.includes("🍀 행운의 셰프")) {
-          titles.push("🍀 행운의 셰프");
-          await AsyncStorage.setItem('cookdex_unlocked_titles', JSON.stringify(titles));
-        }
-      } else if (rewardType === "SCAN") {
-        const scanRaw = await AsyncStorage.getItem('cookdex_daily_scans');
-        const scans = scanRaw ? JSON.parse(scanRaw) : { count: 3 };
-        await AsyncStorage.setItem('cookdex_daily_scans', JSON.stringify({ date: new Date().toLocaleDateString(), count: scans.count + 3 }));
-      }
-
-      setIsSpinning(false);
-      setRouletteResult(rewardName);
-      
-      // 무료 기회였다면 오늘 날짜 저장
-      if (canSpinFree) {
-        setCanSpinFree(false);
-        await AsyncStorage.setItem('cookdex_roulette_date', new Date().toLocaleDateString());
-      }
-    }, 2500);
-  };
-
-  const handleSpinClick = () => {
-    if (canSpinFree) {
-      executeSpin();
-    } else {
-      Alert.alert(
-        "광고 시청 📺",
-        "오늘의 무료 기회를 모두 사용했습니다.\n30초 스폰서 광고를 보고 한 번 더 돌리시겠습니까?",
-        [
-          { text: "취소", style: "cancel" },
-          { text: "시청하기", onPress: () => {
-              // 3초 가상 광고 대기 후 스핀
-              setTimeout(() => executeSpin(), 3000); 
-            }
-          }
-        ]
-      );
-    }
-  };
-
-  const [isCookingMode, setIsCookingMode] = useState(false);
-  const [cookingSteps, setCookingSteps] = useState([]);
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
-
-  // 🚨 [신규 추가] 법적 면책 조항 모달 상태
+  const [equippedTitle, setEquippedTitle] = useState<string | null>(null);
   const [showLegalModal, setShowLegalModal] = useState(false);
+  const [recommendedThemes, setRecommendedThemes] = useState<typeof THEME_POOL>([]);
+  // 테마 재료 입력 모달
+  const [themeModalVisible, setThemeModalVisible] = useState(false);
+  const [selectedThemeForModal, setSelectedThemeForModal] = useState<ThemeItem | null>(null);
+  const [themeModalIngredients, setThemeModalIngredients] = useState<string[]>([]);
+  const [themeModalInput, setThemeModalInput] = useState('');
+  const [useSettingsCondiments, setUseSettingsCondiments] = useState(true);
+  const [savedCondiments, setSavedCondiments] = useState<string[]>([]);
 
   useEffect(() => {
-    const showSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => setKeyboardHeight(e.endCoordinates.height));
-    const hideSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardHeight(0));
-    
-    // 🚨 앱 실행 시 법적 동의 여부 체크
     const checkLegalAgreement = async () => {
       try {
         const hasAgreed = await AsyncStorage.getItem('cookdex_legal_agreed');
-        if (hasAgreed !== 'true') {
-          setShowLegalModal(true); // 동의 기록이 없으면 팝업 띄움
-        }
+        if (hasAgreed !== 'true') setShowLegalModal(true);
       } catch (e) {}
     };
     checkLegalAgreement();
-
-    return () => { showSub.remove(); hideSub.remove(); };
   }, []);
 
-  // 🚨 동의 버튼 누를 때 실행되는 함수
   const handleAgreeLegal = async () => {
     try {
       await AsyncStorage.setItem('cookdex_legal_agreed', 'true');
       setShowLegalModal(false);
-    } catch (e) {
-      Alert.alert("에러", "동의 상태 저장에 실패했습니다.");
-    }
+    } catch (e) {}
   };
 
   useFocusEffect(
     useCallback(() => {
-      const loadDashboardData = async () => {
+      const load = async () => {
         try {
-          const exp = await AsyncStorage.getItem('cookdex_user_exp');
-          const currentExp = exp ? parseInt(exp) : 0;
-          setUserExp(currentExp);
-          if (currentExp < 50) setUserLevel("초보 요리사 🍳");
-          else if (currentExp < 150) setUserLevel("동네 맛집 사장님 🧑‍🍳");
-          else setUserLevel("마스터 셰프 👑");
-
           const currentUser = auth.currentUser;
-          if (currentUser) setUserName(currentUser.displayName || "셰프");
+          if (currentUser?.displayName) setUserName(currentUser.displayName);
+          else if (currentUser?.email) setUserName(currentUser.email.split('@')[0] || '셰프');
 
-          const today = new Date().toLocaleDateString(); 
-          const limitDataRaw = await AsyncStorage.getItem('cookdex_daily_limit');
-          if (limitDataRaw) {
-            const limitData = JSON.parse(limitDataRaw);
-            if (limitData.date === today) setScansLeft(limitData.left);
-            else { setScansLeft(DAILY_FREE_LIMIT); await AsyncStorage.setItem('cookdex_daily_limit', JSON.stringify({ date: today, left: DAILY_FREE_LIMIT })); }
-          } else await AsyncStorage.setItem('cookdex_daily_limit', JSON.stringify({ date: today, left: DAILY_FREE_LIMIT }));
-        } catch (error) {}
+          const dietRaw = await AsyncStorage.getItem('cookdex_diet_goal');
+          const allergiesRaw = await AsyncStorage.getItem('cookdex_allergies');
+          let dietList: string[] = [];
+          try {
+            if (dietRaw && dietRaw !== '없음') dietList = JSON.parse(dietRaw);
+          } catch (_) {}
+          const hasAllergies = allergiesRaw && allergiesRaw !== '없음';
+          const timeSlot = getTimeSlot();
+
+          const scored = THEME_POOL.map((t) => {
+            let score = 0;
+            if (t.dietTags?.some((tag) => dietList.includes(tag))) score += 3;
+            if (t.timeSlot === timeSlot) score += 2;
+            if (t.id === 'allergy' && hasAllergies) score += 2;
+            if (!t.dietTags && !t.timeSlot && t.id !== 'allergy') score += 1;
+            return { ...t, score };
+          });
+          const sorted = scored.sort((a, b) => b.score - a.score);
+          const top = sorted.slice(0, 6);
+          setRecommendedThemes(top.length > 0 ? top : THEME_POOL.slice(0, 6));
+
+          const expRaw = await AsyncStorage.getItem('cookdex_user_exp');
+          const currentExp = expRaw ? parseInt(expRaw, 10) : 0;
+          setUserExp(Number.isNaN(currentExp) ? 0 : currentExp);
+
+          const savedTitle = await AsyncStorage.getItem('cookdex_equipped_title');
+          setEquippedTitle(savedTitle || null);
+        } catch (e) {}
       };
-      loadDashboardData();
+      load();
     }, [])
   );
 
-  const refillQA = async () => {
-    try {
-      await AsyncStorage.setItem('cookdex_daily_limit', JSON.stringify({ date: new Date().toLocaleDateString(), left: 9999 }));
-      setScansLeft(9999);
-      Alert.alert("🛠️ QA 모드 발동!", "AI 카메라 스캔 횟수가 무제한으로 충전되었습니다.");
-    } catch (e) {}
+  const goCreateRecipe = (theme?: string) => {
+    if (theme) router.push({ pathname: '/create-recipe', params: { directStyle: theme } });
+    else router.push('/create-recipe');
   };
 
-  // 테스트용: 동의 기록 초기화 버튼 (나중에 지울 수 있음)
-  const resetLegal = async () => {
-    await AsyncStorage.removeItem('cookdex_legal_agreed');
-    Alert.alert("초기화", "법적 동의 기록이 초기화되었습니다. 앱을 껐다 켜보세요.");
+  const openThemeModal = (theme: ThemeItem) => {
+    setSelectedThemeForModal(theme);
+    setThemeModalIngredients([]);
+    setThemeModalInput('');
+    setThemeModalVisible(true);
+    AsyncStorage.getItem('cookdex_condiments')
+      .then((raw) => {
+        const list = raw ? JSON.parse(raw) : [];
+        setSavedCondiments(Array.isArray(list) ? list : []);
+      })
+      .catch(() => setSavedCondiments([]));
   };
 
-  const handleScanPress = () => {
-    if (scansLeft > 0) {
-      router.push('/scanner');
+  const closeThemeModal = () => {
+    setThemeModalVisible(false);
+    setSelectedThemeForModal(null);
+    setThemeModalIngredients([]);
+    setThemeModalInput('');
+  };
+
+  const toggleThemeModalIngredient = (ing: string) => {
+    if (themeModalIngredients.includes(ing)) {
+      setThemeModalIngredients((prev) => prev.filter((i) => i !== ing));
     } else {
-      Alert.alert("💡 일일 스캔 완료!", "오늘의 무료 스캔을 모두 사용하셨습니다. QA 모드를 이용해 충전하세요!");
+      setThemeModalIngredients((prev) => [...prev, ing]);
     }
   };
 
-  const toggleIngredient = (ing) => {
-    if (selectedIngredients.includes(ing)) setSelectedIngredients(prev => prev.filter(i => i !== ing));
-    else setSelectedIngredients(prev => [...prev, ing]);
-    setIngredientSearch(""); 
+  const addThemeModalCustomIngredient = () => {
+    const v = themeModalInput.trim();
+    if (v && !themeModalIngredients.includes(v)) {
+      setThemeModalIngredients((prev) => [...prev, v]);
+      setThemeModalInput('');
+    }
   };
 
-  const addCustomIngredient = () => {
-    const newIng = ingredientSearch.trim();
-    if (newIng && !selectedIngredients.includes(newIng)) setSelectedIngredients(prev => [...prev, newIng]);
-    setIngredientSearch("");
+  const submitThemeRecommend = () => {
+    if (!selectedThemeForModal) return;
+    const withSettings = useSettingsCondiments ? savedCondiments : [];
+    const merged = [...new Set([...withSettings, ...themeModalIngredients])];
+    if (merged.length === 0) {
+      Alert.alert('알림', '재료를 1개 이상 추가하거나, 설정 재료를 포함해 주세요.');
+      return;
+    }
+    closeThemeModal();
+    router.push({
+      pathname: '/create-recipe',
+      params: { directStyle: selectedThemeForModal.keyword, directIngredients: merged.join(',') },
+    });
+    (async () => {
+      try {
+        const logRaw = await AsyncStorage.getItem('cookdex_theme_used_log');
+        const log = logRaw ? JSON.parse(logRaw) : [];
+        log.push({ themeId: selectedThemeForModal.id, ts: Date.now() });
+        await AsyncStorage.setItem('cookdex_theme_used_log', JSON.stringify(log.slice(-100)));
+      } catch (_) {}
+    })();
   };
 
-  const filteredIngredients = COMMON_INGREDIENTS.filter(i => i.includes(ingredientSearch) && !selectedIngredients.includes(i));
-  const forceScrollToInput = () => { setTimeout(() => { if (scrollViewRef.current && inputBoxY) scrollViewRef.current.scrollTo({ y: Math.max(0, inputBoxY - (windowHeight * 0.25)), animated: true }); }, 350); };
-
-  const getCurationThemes = async (stylePreference = "") => {
-    let finalIngredients = [...selectedIngredients];
-    if (ingredientSearch.trim()) finalIngredients.push(ingredientSearch.trim());
-
-    if (finalIngredients.length === 0) { Alert.alert("알림", "식재료를 먼저 추가해 주세요!"); return; }
-    
-    setIngredientSearch("");
-    setShowBottomModal(true); setIsCurating(true); setCurationThemes(null); setTextRecipeResult(null); setShoppingList([]);
-    
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-      // --- [유저 맞춤 설정 불러오기] ---
-      const savedDietRaw = await AsyncStorage.getItem('cookdex_diet_goal');
-      let savedDiet = [];
-      try { savedDiet = savedDietRaw ? JSON.parse(savedDietRaw) : []; } catch (e) { savedDiet = savedDietRaw && savedDietRaw !== "없음" ? [savedDietRaw] : []; }
-      const savedAllergies = await AsyncStorage.getItem('cookdex_allergies');
-      const savedCondimentsRaw = await AsyncStorage.getItem('cookdex_condiments');
-      
-      const dietText = savedDiet.length > 0 ? `[식단 목표: ${savedDiet.join(', ')}]에 맞춰서 요리해 줘.` : "";
-      const allergyText = savedAllergies && savedAllergies !== "없음" ? `[🚨치명적 경고🚨 알레르기 및 기피 재료: ${savedAllergies}] 이 재료들은 레시피에 절대 포함시키지 마!` : "";
-      const condimentsText = savedCondimentsRaw ? `[보유 중인 기본 양념/향신료: ${JSON.parse(savedCondimentsRaw).join(', ')}] 이 재료들은 이미 집에 있으니 '부족한 구매 리스트'에서 빼고 자유롭게 써 줘.` : "";
-
-      const userContextPrompt = `\n\n--- 👨‍🍳 셰프 맞춤 설정 ---\n${dietText}\n${allergyText}\n${condimentsText}\n----------------------\n`;
-      // ---------------------------------
-      const currentTime = new Date().getHours() < 11 ? "아침" : new Date().getHours() < 16 ? "점심" : "저녁/야식";
-      const stylePrompt = `[사용자가 희망한 요리 스타일: ${stylePreference ? stylePreference : "AI 알아서 추천"}]`;
-
-      const systemPrompt = `너는 최고의 셰프 '쿡덱스'야. 식재료를 분석해 3가지 요리 테마를 제안해.\n[식재료]: ${finalIngredients.join(', ')}\n[상황]: 현재 시간은 ${currentTime}\n${stylePrompt}${userContextPrompt}\n반드시 JSON 형식으로만 대답해. 마크다운(\`\`\`json 등) 절대 금지.\n{ "curation_themes": [ { "theme_title": "요리 이름", "match_reason": "추천 이유 1줄", "badge_icon": "이모지 1개", "ui_accent_color": "#FF8C00" } ] }`;
-
-      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }] }) });
-      const data = await response.json();
-      
-      if (!response.ok) throw new Error(`[${response.status}] ${data.error?.message}`);
-
-      let rawText = data.candidates[0].content.parts[0].text.trim().replace(/```json/g, '').replace(/```/g, ''); 
-      const parsedData = JSON.parse(rawText);
-      setCurationThemes(parsedData.curation_themes.slice(0, 3));
-    } catch (error) { 
-      Alert.alert("안내", `테마를 불러오지 못했습니다.\n상세: ${error.message}`); 
-      setShowBottomModal(false); 
-    } finally { setIsCurating(false); }
+  const goToScannerForTheme = () => {
+    if (!selectedThemeForModal) return;
+    closeThemeModal();
+    router.push({
+      pathname: '/scanner',
+      params: { themeKeyword: selectedThemeForModal.keyword, themeTitle: selectedThemeForModal.title },
+    });
   };
 
-  const generateFinalRecipe = async (theme) => {
-    setIsGeneratingRecipe(true);
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-      // --- [유저 맞춤 설정 불러오기] ---
-      const savedDietRaw = await AsyncStorage.getItem('cookdex_diet_goal');
-      let savedDiet = [];
-      try { savedDiet = savedDietRaw ? JSON.parse(savedDietRaw) : []; } catch (e) { savedDiet = savedDietRaw && savedDietRaw !== "없음" ? [savedDietRaw] : []; }
-      const savedAllergies = await AsyncStorage.getItem('cookdex_allergies');
-      const savedCondimentsRaw = await AsyncStorage.getItem('cookdex_condiments');
-      
-      const dietText = savedDiet.length > 0 ? `[식단 목표: ${savedDiet.join(', ')}]에 맞춰서 요리해 줘.` : "";
-      const allergyText = savedAllergies && savedAllergies !== "없음" ? `[🚨치명적 경고🚨 알레르기 및 기피 재료: ${savedAllergies}] 이 재료들은 레시피에 절대 포함시키지 마!` : "";
-      const condimentsText = savedCondimentsRaw ? `[보유 중인 기본 양념/향신료: ${JSON.parse(savedCondimentsRaw).join(', ')}] 이 재료들은 이미 집에 있으니 '부족한 구매 리스트'에서 빼고 자유롭게 써 줘.` : "";
-
-      const userContextPrompt = `\n\n--- 👨‍🍳 셰프 맞춤 설정 ---\n${dietText}\n${allergyText}\n${condimentsText}\n----------------------\n`;
-      // ---------------------------------
-      
-      const systemPrompt = `너는 셰프야. 재료(${selectedIngredients.join(', ')})를 가지고 [${theme.theme_title}] 레시피를 작성해.${userContextPrompt}\n⚠️ 필수 지시사항: 각 식재료의 중량을 추정하여 1인분 기준 총 칼로리(kcal)와 핵심 영양성분(탄수화물, 단백질, 지방)을 근사치 100%에 가깝게 계산한 뒤, 레시피 제목 바로 밑에 눈에 띄게 표기해.\n반드시 아래 JSON 형식으로만 대답해. 마크다운(\`\`\`json 등) 절대 금지.\n{ "safety_warning": "위생 경고 필요시 작성, 없으면 null", "substitutions": [ { "original": "필요한데 유저가 입력 안한 재료", "substitute": "대체재", "reason": "대체 이유" } ], "shopping_list": ["대체불가 필수 마트 구매 재료"], "recipe_markdown": "무조건 첫 줄은 '# ${theme.theme_title}'. 조리 순서는 무조건 '1. ', '2. ' 같은 숫자로 시작할 것." }`;
-      
-      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }] }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(`[${response.status}] ${data.error?.message}`);
-
-      let rawText = data.candidates[0].content.parts[0].text.trim().replace(/```json/g, '').replace(/```/g, ''); 
-      const parsedData = JSON.parse(rawText);
-
-      if (parsedData.safety_warning && parsedData.safety_warning !== "null") Alert.alert("🚨 쿡덱스 위생/안전 경고!", parsedData.safety_warning);
-      setShoppingList(parsedData.shopping_list && Array.isArray(parsedData.shopping_list) ? parsedData.shopping_list : []);
-
-      let finalMarkdown = parsedData.recipe_markdown;
-      if (parsedData.substitutions && parsedData.substitutions.length > 0) {
-          const titleMatch = finalMarkdown.match(/^(# .+?\n)/);
-          let subText = "\n> **💡 쿡덱스 스마트 대체재 추천**\n";
-          parsedData.substitutions.forEach(s => { subText += `> - ❌ ${s.original} ➡️ ⭕ **${s.substitute}** (${s.reason})\n`; });
-          subText += "\n";
-          if(titleMatch) finalMarkdown = finalMarkdown.replace(titleMatch[0], titleMatch[0] + subText);
-          else finalMarkdown = subText + finalMarkdown;
-      }
-      finalMarkdown = finalMarkdown.replace(/\*\*'([^']+)'\*\*/g, '**$1**').replace(/'\*\*(.+?)\*\*'/g, '**$1**');   
-      setTextRecipeResult(finalMarkdown);
-      await AsyncStorage.setItem('cookdex_draft_recipe', JSON.stringify({ ingredients: selectedIngredients, recipe: finalMarkdown, shopping: parsedData.shopping_list }));
-    } catch (error) { Alert.alert("에러", "레시피 생성 실패"); setShowBottomModal(false); } finally { setIsGeneratingRecipe(false); }
+  const goQuickMenu = (target: string) => {
+    if (target === 'create') goCreateRecipe();
+    else if (target === 'recipes') router.push('/(tabs)/recipes');
+    else if (target === 'quest') router.push('/(tabs)/quest');
+    else if (target === 'benefits') router.push('/(tabs)/benefits');
   };
-
-  const startCookingMode = () => {
-    if (!textRecipeResult) return;
-    const extractedSteps = textRecipeResult.split('\n').filter(line => /^\d+\.\s/.test(line.trim())).map(line => line.replace(/^\d+\.\s/, '').replace(/\*\*/g, '').trim());
-    if (extractedSteps.length === 0) { Alert.alert("알림", "조리 단계를 명확히 인식하지 못했습니다. 일반 텍스트 모드를 이용해주세요."); return; }
-    setCookingSteps(extractedSteps); setCurrentStepIndex(0); setIsCookingMode(true);
-    Speech.speak(extractedSteps[0], { language: 'ko-KR', rate: 0.95, pitch: 1.0 });
-  };
-  const handleNextStep = () => { if (currentStepIndex < cookingSteps.length - 1) { Speech.stop(); setCurrentStepIndex(prev => prev + 1); Speech.speak(cookingSteps[currentStepIndex + 1], { language: 'ko-KR', rate: 0.95 }); } };
-  const handlePrevStep = () => { if (currentStepIndex > 0) { Speech.stop(); setCurrentStepIndex(prev => prev - 1); Speech.speak(cookingSteps[currentStepIndex - 1], { language: 'ko-KR', rate: 0.95 }); } };
-  const handleReplayStep = () => { Speech.stop(); Speech.speak(cookingSteps[currentStepIndex], { language: 'ko-KR', rate: 0.95 }); };
-  const handleExitCookingMode = () => { Speech.stop(); setIsCookingMode(false); };
-
-  const handleCloseModal = () => {
-    if (textRecipeResult || curationThemes) {
-      Alert.alert("앗! 잠깐만요 🛑", "아직 레시피를 저장하지 않았어요. 창을 닫으시겠습니까?", [{ text: "취소", style: "cancel" }, { text: "닫기", style: "destructive", onPress: () => setShowBottomModal(false) }]);
-    } else setShowBottomModal(false);
-  };
-
-  const handleRecipeSaveAndShare = async (isSharing) => {
-    if (!textRecipeResult) return;
-    try {
-      const recipeId = Date.now().toString();
-      const newRecipe = { id: recipeId, date: new Date().toLocaleDateString(), content: textRecipeResult };
-      const existingData = await AsyncStorage.getItem('cookdex_saved_recipes');
-      const savedRecipes = existingData ? JSON.parse(existingData) : [];
-      savedRecipes.unshift(newRecipe);
-      await AsyncStorage.setItem('cookdex_saved_recipes', JSON.stringify(savedRecipes));
-
-      const earnedExp = isSharing ? 30 : 10;
-      const currentExp = parseInt(await AsyncStorage.getItem('cookdex_user_exp') || '0');
-      const newExp = currentExp + earnedExp;
-      await AsyncStorage.setItem('cookdex_user_exp', newExp.toString());
-
-      setUserExp(newExp); setSelectedIngredients([]); setShowBottomModal(false); setShoppingList([]);
-
-      const currentUser = auth.currentUser;
-      if (currentUser) {
-        await setDoc(doc(db, "users", currentUser.uid), { totalExp: increment(earnedExp) }, { merge: true });
-        if (isSharing) {
-          await setDoc(doc(db, "global_recipes", recipeId), { id: recipeId, content: textRecipeResult, authorId: currentUser.uid, authorName: currentUser.displayName || "익명 셰프", createdAt: new Date().toISOString(), likes: 0 });
-          Alert.alert("광장에 등록 완료! 🌍✨", `레시피를 공유하여 엄청난 보상을 받았습니다! (+${earnedExp} EXP)`);
-        } else Alert.alert("내 주방 저장 완료! 🍳", `레시피가 조용히 저장되었습니다. (+${earnedExp} EXP)`);
-      }
-    } catch (error) { alert("저장 에러"); }
-  };
-
-  const handleShopping = (item) => {
-    const coupangSearchUrl = `https://m.coupang.com/nm/search?q=${encodeURIComponent(item)}`;
-    Linking.openURL(coupangSearchUrl).catch((err) => console.error('쇼핑몰 연결 실패', err));
-  };
-
-  const requestNewStyle = () => {
-    let finalType = isCustomType && customTypeInput.trim() !== "" ? customTypeInput : selectedType;
-    let finalTaste = isCustomTaste && customTasteInput.trim() !== "" ? customTasteInput : selectedTaste;
-    let styleStr = "";
-    if (finalType) styleStr += `요리 종류: ${finalType}, `;
-    if (finalTaste) styleStr += `맛/분위기: ${finalTaste}`;
-    if (!styleStr) { Alert.alert("알림", "원하시는 요리 종류나 맛을 선택해주세요!"); return; }
-    setShowStyleModal(false); getCurationThemes(styleStr);
-  };
-
-  const currentLevelInfo = calculateLevel(userExp);
-  const expProgress = currentLevelInfo.level === 'MAX' ? 100 : (userExp / currentLevelInfo.nextExp) * 100;
 
   return (
     <SafeAreaView style={styles.container}>
-      
-      {/* 🚨 법적 면책 조항 모달 (최초 1회 강제) */}
-      <Modal visible={showLegalModal} transparent={true} animationType="fade" onRequestClose={() => {}}>
-        <View style={styles.legalModalOverlay}>
-          <View style={styles.legalModalContent}>
-            <Text style={styles.legalModalTitle}>🚨 쿡덱스 서비스 이용 동의</Text>
-            <ScrollView showsVerticalScrollIndicator={false} style={styles.legalScrollView}>
-              <Text style={styles.legalMainText}>AI 셰프 쿡덱스를 이용하기 전, 사용자의 안전을 위해 반드시 아래 내용을 확인해 주세요.</Text>
-              
-              <View style={styles.legalPointBox}>
-                <Text style={styles.legalPointTitle}>🥩 1. 조리 및 위생 주의</Text>
-                <Text style={styles.legalPointDesc}>AI가 제안하는 조리 시간과 온도는 대략적인 참고용입니다. 고기, 해산물 등은 반드시 본인의 판단하에 속까지 안전하게 완전히 익혀 드셔야 합니다.</Text>
+      <Modal visible={showLegalModal} transparent animationType="fade" onRequestClose={() => {}}>
+        <View style={styles.legalOverlay}>
+          <View style={styles.legalContent}>
+            <Text style={styles.legalTitle}>쿡덱스 서비스 이용 동의</Text>
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.legalScroll}>
+              <Text style={styles.legalIntro}>AI 셰프 쿡덱스를 이용하기 전, 아래 내용을 확인해 주세요.</Text>
+              <View style={styles.legalPoint}>
+                <Text style={styles.legalPointTitle}>1. 조리 및 위생 주의</Text>
+                <Text style={styles.legalPointDesc}>AI가 제안하는 조리 시간·온도는 참고용입니다. 고기·해산물 등은 충분히 익혀 드세요.</Text>
               </View>
-
-              <View style={styles.legalPointBox}>
-                <Text style={styles.legalPointTitle}>🥜 2. 알레르기 확인 의무</Text>
-                <Text style={styles.legalPointDesc}>생성된 레시피에 본인에게 치명적인 알레르기 유발 물질이 포함되어 있는지, 조리 전에 유저 스스로 직접 교차 검증해야 합니다.</Text>
+              <View style={styles.legalPoint}>
+                <Text style={styles.legalPointTitle}>2. 알레르기 확인 의무</Text>
+                <Text style={styles.legalPointDesc}>레시피에 알레르기 유발 재료가 없는지 조리 전에 반드시 확인하세요.</Text>
               </View>
-
-              <View style={styles.legalPointBox}>
-                <Text style={styles.legalPointTitle}>🤖 3. AI 할루시네이션(착각) 주의</Text>
-                <Text style={styles.legalPointDesc}>AI는 시각적으로 완벽하지 않으며, 가끔 먹을 수 없는 물건(예: 모형, 화학제품 등)을 식재료로 착각하여 요리를 제안할 수 있습니다. 비식재료는 절대 취식하지 마십시오.</Text>
+              <View style={styles.legalPoint}>
+                <Text style={styles.legalPointTitle}>3. AI 할루시네이션 주의</Text>
+                <Text style={styles.legalPointDesc}>AI가 비식재료를 식재료로 착각할 수 있습니다. 비식재료는 절대 취식하지 마세요.</Text>
               </View>
-
-              <Text style={styles.legalFooterText}>※ 위 사항을 무시하여 발생한 취식 상의 문제 및 신체적 피해에 대하여 앱 개발자는 어떠한 법적 책임도 지지 않음을 명시합니다.</Text>
+              <Text style={styles.legalFooter}>위 사항 무시로 인한 피해에 대해 앱 개발자는 법적 책임을 지지 않습니다.</Text>
             </ScrollView>
-
-            <TouchableOpacity style={styles.legalAgreeButton} onPress={handleAgreeLegal}>
-              <Text style={styles.legalAgreeButtonText}>위 모든 내용을 숙지하였으며, 동의합니다</Text>
+            <TouchableOpacity style={styles.legalAgreeBtn} onPress={handleAgreeLegal}>
+              <Text style={styles.legalAgreeBtnText}>동의합니다</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      <KeyboardAvoidingView style={{flex: 1}} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 20, paddingBottom: keyboardHeight + 80 }} keyboardShouldPersistTaps="handled">
-          
-          <View style={styles.header}>
-            <View>
-              <Text style={styles.greeting}>안녕하세요, {userName}님! 👋</Text>
-              <Text style={styles.subGreeting}>오늘은 어떤 요리를 해볼까요?</Text>
+      {/* 테마 재료 입력 모달 — 설정(식재료·알레르기) 반영 후 N가지 추천 */}
+      <Modal visible={themeModalVisible} transparent animationType="slide" onRequestClose={closeThemeModal}>
+        <TouchableWithoutFeedback onPress={closeThemeModal}>
+          <View style={styles.themeModalOverlay}>
+            <TouchableWithoutFeedback onPress={() => {}}>
+              <View style={styles.themeModalContent}>
+            <View style={styles.themeModalHeader}>
+              <TouchableOpacity onPress={closeThemeModal} hitSlop={12}>
+                <Text style={styles.themeModalClose}>✕</Text>
+              </TouchableOpacity>
+              <Text style={styles.themeModalTitle} numberOfLines={1}>
+                {selectedThemeForModal?.title}으로 추천받기
+              </Text>
+              <View style={{ width: 28 }} />
             </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <View style={styles.levelBadge}><Text style={styles.levelText}>{userLevel}</Text></View>
-              <Text style={styles.expText}>EXP: {userExp}</Text>
-            </View>
-          </View>
-
-          <View style={{flexDirection: 'row', gap: 10, marginBottom: 20}}>
-            <TouchableOpacity style={[styles.qaButton, {flex: 1}]} onPress={refillQA}>
-              <Text style={styles.qaButtonText}>🛠️ QA 모드 (999회 충전)</Text>
-            </TouchableOpacity>
-            {/* 테스트를 위해 언제든 면책 팝업을 다시 띄워볼 수 있는 버튼 */}
-            <TouchableOpacity style={[styles.qaButton, {flex: 1, backgroundColor: '#5A4E49'}]} onPress={resetLegal}>
-              <Text style={styles.qaButtonText}>🔄 동의 기록 초기화</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* 🚀 슈퍼앱 히어로 배너 (Hero Banner) */}
-          <TouchableOpacity 
-            style={styles.heroBanner} 
-            activeOpacity={0.9}
-            onPress={() => router.push('/create-recipe')}
-          >
-            <ImageBackground 
-              source={{uri: 'https://images.unsplash.com/photo-1495195129352-aeb325a55b65?q=80&w=2076&auto=format&fit=crop'}} 
-              style={styles.heroBackground}
-            >
-              <View style={styles.heroOverlay}>
-                <Text style={styles.heroTitle}>냉장고 파먹기 시작! 🥩🥬</Text>
-                <Text style={styles.heroSub}>카메라로 찍기만 하면 AI가 레시피를 뚝딱</Text>
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+              <ScrollView style={styles.themeModalScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                <View style={styles.themeModalRow}>
+                  <Text style={styles.themeModalLabel}>설정 재료 포함</Text>
+                  <Switch
+                    value={useSettingsCondiments}
+                    onValueChange={setUseSettingsCondiments}
+                    trackColor={{ false: Colors.border, true: Colors.primarySoft }}
+                    thumbColor={useSettingsCondiments ? Colors.primary : Colors.textSub}
+                  />
+                </View>
+                {useSettingsCondiments && savedCondiments.length > 0 && (
+                  <Text style={styles.themeModalHint}>보유 양념/재료: {savedCondiments.slice(0, 5).join(', ')}{savedCondiments.length > 5 ? ' 외 ' + (savedCondiments.length - 5) + '개' : ''}</Text>
+                )}
+                <TouchableOpacity style={styles.themeModalCameraBtn} onPress={goToScannerForTheme}>
+                  <Text style={styles.themeModalCameraText}>📷 카메라로 재료 스캔하기</Text>
+                </TouchableOpacity>
+                <Text style={styles.themeModalLabel}>직접 입력하여 레시피 만들기</Text>
+                <View style={styles.themeModalChipWrap}>
+                  {THEME_MODAL_INGREDIENTS.slice(0, 5).map((ing) => (
+                    <TouchableOpacity
+                      key={ing}
+                      style={[styles.themeModalChip, themeModalIngredients.includes(ing) && styles.themeModalChipActive]}
+                      onPress={() => toggleThemeModalIngredient(ing)}
+                    >
+                      <Text style={[styles.themeModalChipText, themeModalIngredients.includes(ing) && styles.themeModalChipTextActive]}>{ing}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <View style={styles.themeModalInputRow}>
+                  <TextInput
+                    style={styles.themeModalInput}
+                    placeholder="재료 직접 입력 (예: 굴소스)"
+                    placeholderTextColor={Colors.textSub}
+                    value={themeModalInput}
+                    onChangeText={setThemeModalInput}
+                    onSubmitEditing={addThemeModalCustomIngredient}
+                  />
+                  <TouchableOpacity style={styles.themeModalAddBtn} onPress={addThemeModalCustomIngredient}>
+                    <Text style={styles.themeModalAddBtnText}>추가</Text>
+                  </TouchableOpacity>
+                </View>
+                {themeModalIngredients.length > 0 && (
+                  <View style={styles.themeModalSelectedWrap}>
+                    {themeModalIngredients.map((ing) => (
+                      <TouchableOpacity key={ing} style={styles.themeModalSelectedChip} onPress={() => toggleThemeModalIngredient(ing)}>
+                        <Text style={styles.themeModalSelectedText}>{ing} ✕</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+                <TouchableOpacity style={styles.themeModalSubmitBtn} onPress={submitThemeRecommend}>
+                  <Text style={styles.themeModalSubmitText}>3가지 레시피 추천받기</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </KeyboardAvoidingView>
               </View>
-            </ImageBackground>
-          </TouchableOpacity>
-
-          {/* 📱 모던 벤토 박스 그리드 (Modern Quick Menu) */}
-          <View style={styles.modernGrid}>
-            {/* 첫 번째 줄 */}
-            <View style={styles.gridRow}>
-              <TouchableOpacity style={styles.modernGridCard} activeOpacity={0.8} onPress={() => router.push('/(tabs)/recipes')}>
-                <Text style={styles.modernGridIcon}>🍳</Text>
-                <Text style={styles.modernGridTitle}>내 주방</Text>
-                <Text style={styles.modernGridSub}>나만의 레시피</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity style={styles.modernGridCard} activeOpacity={0.8} onPress={() => router.push('/(tabs)/plaza')}>
-                <Text style={styles.modernGridIcon}>🌍</Text>
-                <Text style={styles.modernGridTitle}>요리 광장</Text>
-                <Text style={styles.modernGridSub}>모두의 레시피</Text>
-              </TouchableOpacity>
-            </View>
-            
-            {/* 두 번째 줄 */}
-            <View style={styles.gridRow}>
-              <TouchableOpacity style={styles.modernGridCard} activeOpacity={0.8} onPress={() => router.push('/(tabs)/quest')}>
-                <Text style={styles.modernGridIcon}>📜</Text>
-                <Text style={styles.modernGridTitle}>도파민 퀘스트</Text>
-                <Text style={styles.modernGridSub}>경험치 & 보상</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity style={styles.modernGridCard} activeOpacity={0.8} onPress={() => router.push('/(tabs)/profile')}>
-                <Text style={styles.modernGridIcon}>⚙️</Text>
-                <Text style={styles.modernGridTitle}>내 정보</Text>
-                <Text style={styles.modernGridSub}>맞춤 설정</Text>
-              </TouchableOpacity>
-            </View>
+            </TouchableWithoutFeedback>
           </View>
+        </TouchableWithoutFeedback>
+      </Modal>
 
-          {/* 🔥 오늘의 셰프 추천 테마 */}
-          <View style={styles.themeSection}>
-            <Text style={styles.themeSectionTitle}>🔥 오늘의 셰프 추천 테마</Text>
-            <ScrollView 
-              horizontal 
-              showsHorizontalScrollIndicator={false} 
-              contentContainerStyle={styles.themeScroll}
+      <View style={styles.screenWrap}>
+        {/* 1층: 메인 그라데이션 (상단 오렌지 톤) */}
+        <LinearGradient
+          colors={[Colors.primarySoft, Colors.bgMain, Colors.bgMain]}
+          locations={[0, 0.35, 1]}
+          style={StyleSheet.absoluteFill}
+        />
+        {/* 2층: 메쉬 느낌 — 우하단 민트/피치 톤 */}
+        <LinearGradient
+          colors={[Colors.meshMint, 'transparent', Colors.meshPeach]}
+          locations={[0, 0.5, 1]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+        {/* 3층: 은은한 노이즈 질감 (배경 깊이감) */}
+        <View style={styles.bgNoise} pointerEvents="none" />
+        <KeyboardAvoidingView style={styles.keyboardView} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* 포털 헤더 */}
+            <View style={styles.header}>
+              <View style={styles.headerLeft}>
+                <Text style={styles.logo}>CookDex</Text>
+                <View style={styles.greetingRow}>
+                  <Text style={styles.greeting}>{userName}님 어서오세요!</Text>
+                  {equippedTitle && (
+                    <View style={styles.titlePill}>
+                      <Text style={styles.titlePillText}>{equippedTitle}</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+              <View style={styles.headerRight}>
+                {(() => {
+                  const levelInfo = calculateLevel(userExp);
+                  const progressPercent = Math.max(
+                    0,
+                    Math.min(100, Math.round((userExp / levelInfo.nextExp) * 100)),
+                  );
+                  return (
+                    <View style={styles.levelBadgeWrap}>
+                      <View style={styles.levelBadgeOuter}>
+                        <View style={styles.levelBadgeRing} />
+                        <View style={styles.levelBadgeInner}>
+                          <Text style={styles.levelLabel}>Lv</Text>
+                          <Text style={styles.levelNumber}>
+                            {levelInfo.level}
+                          </Text>
+                        </View>
+                        <View style={styles.levelCrown}>
+                          <Text style={styles.levelCrownText}>👑</Text>
+                        </View>
+                      </View>
+                    </View>
+                  );
+                })()}
+              </View>
+            </View>
+
+            {/* 검색창 */}
+            <TouchableOpacity style={[styles.searchBar, styles.glassCard]} activeOpacity={0.9} onPress={() => goCreateRecipe()}>
+              <Text style={styles.searchPlaceholder}>재료나 요리명 검색 · AI 레시피 만들기</Text>
+            </TouchableOpacity>
+
+            {/* 오늘 냉장고 파먹기 (메인 CTA) — 배경 이미지 + 가독성 오버레이 */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>오늘 냉장고 파먹기</Text>
+              <View style={styles.heroCtaShadowDiffused}>
+                <Squishable style={[styles.heroCtaTouch, styles.heroCtaShadowTight]} onPress={() => goCreateRecipe()}>
+                  <View style={[styles.heroCtaInner, GlassHighlight]}>
+                    <ImageBackground
+                      source={HERO_BG_IMAGE}
+                      style={StyleSheet.absoluteFill}
+                      imageStyle={styles.heroCtaBgImage}
+                      resizeMode="cover"
+                    />
+                    <View style={styles.heroCtaOverlay} />
+                    <View style={styles.heroCta}>
+                      <View style={styles.heroCtaIconWrap}>
+                        <MaterialCommunityIcons name="fridge-outline" size={28} color={Colors.textInverse} />
+                      </View>
+                      <View style={styles.heroCtaTextWrap}>
+                        <Text style={styles.heroCtaTitle}>냉장고 파먹기 시작!</Text>
+                        <Text style={styles.heroCtaSub}>재료만 알려주면 AI가 레시피를 만들어요</Text>
+                      </View>
+                    </View>
+                  </View>
+                </Squishable>
+              </View>
+            </View>
+
+            {/* 퀵 메뉴 — 스퀴시 + 글래스, 2개씩 2열 배치 */}
+            <View style={styles.quickMenuUnderHero}>
+              <View style={styles.quickMenuRow}>
+                {QUICK_MENU.slice(0, 2).map((item) => (
+                  <Squishable
+                    key={item.id}
+                    fill
+                    style={[styles.heroCtaSmallTouch, styles.heroCtaSmallShadowTight]}
+                    onPress={() => goQuickMenu(item.onPress)}
+                  >
+                    <View style={[styles.heroCtaSmallInner, GlassHighlight]}>
+                      <BlurView intensity={50} tint="light" style={StyleSheet.absoluteFill} />
+                      <LinearGradient
+                        colors={[item.color, Colors.bgElevated]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={StyleSheet.absoluteFill}
+                      />
+                      <View style={styles.heroCtaSmall}>
+                        <View style={[styles.heroCtaSmallIconWrap, styles.heroCtaSmallIconWrapTinted]}>
+                          <Ionicons name={item.icon} size={20} color={Colors.textMain} />
+                        </View>
+                        <Text style={styles.heroCtaSmallTitleTinted} numberOfLines={2}>{item.label}</Text>
+                      </View>
+                    </View>
+                  </Squishable>
+                ))}
+              </View>
+              <View style={styles.quickMenuRow}>
+                {QUICK_MENU.slice(2, 3).map((item) => (
+                  <Squishable
+                    key={item.id}
+                    fill
+                    style={[styles.heroCtaSmallTouch, styles.heroCtaSmallShadowTight]}
+                    onPress={() => goQuickMenu(item.onPress)}
+                  >
+                    <View style={[styles.heroCtaSmallInner, GlassHighlight]}>
+                      <BlurView intensity={50} tint="light" style={StyleSheet.absoluteFill} />
+                      <LinearGradient
+                        colors={[item.color, Colors.bgElevated]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={StyleSheet.absoluteFill}
+                      />
+                      <View style={styles.heroCtaSmall}>
+                        <View style={[styles.heroCtaSmallIconWrap, styles.heroCtaSmallIconWrapTinted]}>
+                          <Ionicons name={item.icon} size={20} color={Colors.textMain} />
+                        </View>
+                        <Text style={styles.heroCtaSmallTitleTinted} numberOfLines={2}>{item.label}</Text>
+                      </View>
+                    </View>
+                  </Squishable>
+                ))}
+                <View style={styles.quickMenuPlaceholder} />
+              </View>
+            </View>
+
+          {/* 테마별 레시피 — 카드형 좌우 슬라이드 + Unsplash 이미지 */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>나에게 맞는 테마</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.themeCardScroll}
+              snapToInterval={THEME_CARD_SNAP}
+              snapToAlignment="start"
               decelerationRate="fast"
-              overScrollMode="never"
-              keyboardShouldPersistTaps="handled"
             >
-              {RECOMMENDED_THEMES.map(theme => (
-                <TouchableOpacity 
-                  key={theme.id} 
-                  style={styles.themeCard}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    setPreferredStyle(theme.title);
-                    setStyleModalVisible(true);
-                  }}
+              {recommendedThemes.slice(0, 6).map((theme) => (
+                <TouchableOpacity
+                  key={theme.id}
+                  style={[styles.themeCard, { width: THEME_CARD_WIDTH, marginRight: THEME_CARD_MARGIN }]}
+                  activeOpacity={0.95}
+                  onPress={() => openThemeModal(theme)}
                 >
-                  <Text style={styles.themeCardTitle}>{theme.title}</Text>
-                  <Text style={styles.themeCardDesc}>{theme.desc}</Text>
+                  <ImageBackground
+                    source={{ uri: theme.imageUri }}
+                    style={styles.themeCardImage}
+                    imageStyle={styles.themeCardImageStyle}
+                    resizeMode="cover"
+                  >
+                    <LinearGradient
+                      colors={['transparent', 'rgba(0,0,0,0.7)']}
+                      style={styles.themeCardGradient}
+                    />
+                    <Text style={styles.themeCardTitle}>{theme.title}</Text>
+                  </ImageBackground>
                 </TouchableOpacity>
               ))}
             </ScrollView>
           </View>
-
-          <View style={styles.categorySection}>
-            <Text style={styles.categoryHeader}>💡 이런 상황엔 어때요?</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
-              <TouchableOpacity style={styles.categoryCard}><Text style={styles.categoryEmoji}>🏃‍♂️</Text><Text style={styles.categoryText}>바쁜 아침 10분컷</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.categoryCard}><Text style={styles.categoryEmoji}>🍻</Text><Text style={styles.categoryText}>퇴근 후 맥주 안주</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.categoryCard}><Text style={styles.categoryEmoji}>🥗</Text><Text style={styles.categoryText}>다이어트 식단</Text></TouchableOpacity>
-              <TouchableOpacity style={styles.categoryCard}><Text style={styles.categoryEmoji}>🤧</Text><Text style={styles.categoryText}>감기 기운 있을 때</Text></TouchableOpacity>
-            </ScrollView>
-          </View>
-          
         </ScrollView>
       </KeyboardAvoidingView>
-
-      {/* 🚨 요리 스타일 질문 모달 */}
-      <Modal visible={styleModalVisible} transparent={true} animationType="fade" onRequestClose={() => setStyleModalVisible(false)}>
-        <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.modalOverlayCenter}
-        >
-          {/* 빈 공간 터치 시 닫기 위한 투명 배경 버튼 */}
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setStyleModalVisible(false)} />
-          
-          <View style={styles.modalContent}>
-            {/* 우측 상단 닫기(X) 버튼 */}
-            <TouchableOpacity style={styles.closeIconBtn} onPress={() => setStyleModalVisible(false)}>
-              <Text style={styles.closeIconText}>✕</Text>
-            </TouchableOpacity>
-
-            <Text style={styles.modalTitle}>오늘 끌리는 요리 스타일 🍳</Text>
-            <Text style={styles.modalSub}>어떤 형태의 요리를 원하시나요?</Text>
-            
-            <TextInput 
-              style={styles.styleInput} 
-              placeholder="예: 볶음밥, 얼큰한 찌개, 오븐 구이 등" 
-              placeholderTextColor="#A89F9C"
-              value={preferredStyle}
-              onChangeText={setPreferredStyle}
-            />
-            
-            <TouchableOpacity 
-              style={styles.generateBtn} 
-              onPress={() => {
-                setStyleModalVisible(false);
-                getCurationThemes(preferredStyle); 
-              }}
-            >
-              <Text style={styles.generateBtnText}>이 스타일로 AI 추천받기 ✨</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.skipBtn} 
-              onPress={() => {
-                setPreferredStyle("");
-                setStyleModalVisible(false);
-                getCurationThemes("");
-              }}
-            >
-              <Text style={styles.skipBtnText}>건너뛰고 알아서 추천받기</Text>
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* 🎡 행운의 룰렛 모달 */}
-      <Modal visible={rouletteVisible} transparent={true} animationType="slide" onRequestClose={() => !isSpinning && setRouletteVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => !isSpinning && setRouletteVisible(false)} />
-          <View style={styles.rouletteModalContent}>
-            {!isSpinning && (
-              <TouchableOpacity style={styles.closeIconBtn} onPress={() => setRouletteVisible(false)}>
-                <Text style={styles.closeIconText}>✕</Text>
-              </TouchableOpacity>
-            )}
-            
-            <Text style={styles.rouletteTitle}>🍀 오늘의 행운 룰렛</Text>
-            <Text style={styles.rouletteSub}>매일 1회 무료! 꽝 없는 100% 당첨!</Text>
-            
-            <View style={styles.rouletteWheelBox}>
-              {isSpinning ? (
-                <>
-                  <ActivityIndicator size="large" color="#FF8C00" style={{marginBottom: 15}} />
-                  <Text style={styles.spinningText}>두구두구두구... 🥁</Text>
-                </>
-              ) : rouletteResult ? (
-                <View style={{alignItems: 'center'}}>
-                  <Text style={styles.resultLabel}>🎉 당첨 🎉</Text>
-                  <Text style={styles.resultText}>{rouletteResult}</Text>
-                </View>
-              ) : (
-                <Text style={styles.readyText}>버튼을 눌러 룰렛을 돌려보세요!</Text>
-              )}
-            </View>
-
-            <TouchableOpacity style={[styles.spinBtn, isSpinning && {opacity: 0.5}]} onPress={handleSpinClick} disabled={isSpinning}>
-              <Text style={styles.spinBtnText}>{canSpinFree ? "🆓 무료로 1회 돌리기" : "📺 광고 보고 한 번 더 돌리기"}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* 바텀 모달 스튜디오 */}
-      <Modal visible={showBottomModal} transparent={true} animationType="slide" onRequestClose={handleCloseModal}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.bottomSheetContainer}>
-            <View style={styles.dragHandle} />
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitleText}>{textRecipeResult ? "✨ AI 텍스트 레시피" : "🎯 맞춤 요리 제안"}</Text>
-              <TouchableOpacity onPress={handleCloseModal} style={styles.closeButton}><Text style={styles.closeButtonText}>닫기 ✕</Text></TouchableOpacity>
-            </View>
-            
-            <View style={styles.modalBody}>
-              {isCurating && (<View style={styles.loadingBox}><ActivityIndicator size="large" color="#FF8C00" /><Text style={styles.loadingText}>최적의 메뉴를 고민 중입니다...</Text></View>)}
-              
-              {!isCurating && curationThemes && !isGeneratingRecipe && !textRecipeResult && (
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  <Text style={{color: '#8C7A76', marginBottom: 15, fontWeight: 'bold'}}>이런 요리는 어떠신가요?</Text>
-                  {curationThemes.map((theme, index) => (
-                    <TouchableOpacity key={index} style={[styles.themeCard, {borderColor: theme.ui_accent_color}]} onPress={() => generateFinalRecipe(theme)}>
-                      <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 5}}><Text style={{fontSize: 22, marginRight: 8}}>{theme.badge_icon}</Text><Text style={{fontSize: 16, fontWeight: 'bold', color: '#3A2E2B', flex: 1}}>{theme.theme_title}</Text></View>
-                      <Text style={{fontSize: 13, color: '#8C7A76', marginTop: 5}}>{theme.match_reason}</Text>
-                      <View style={{alignSelf: 'flex-end', marginTop: 10, backgroundColor: theme.ui_accent_color, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10}}><Text style={{color: '#fff', fontSize: 12, fontWeight: 'bold'}}>이 레시피 만들기 →</Text></View>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              )}
-
-              {isGeneratingRecipe && (<View style={styles.loadingBox}><ActivityIndicator size="large" color="#4CAF50" /><Text style={styles.loadingText}>선택하신 요리의 레시피를 작성 중입니다...</Text></View>)}
-
-              {!isGeneratingRecipe && textRecipeResult && (
-                <ScrollView style={styles.recipeScroll} showsVerticalScrollIndicator={false}>
-                  <TouchableOpacity style={styles.ttsStartBtn} onPress={startCookingMode}><Text style={styles.ttsStartBtnText}>🔊 화면 안 보고 귀로 듣기 (조리 모드)</Text></TouchableOpacity>
-                  <Markdown style={markdownStyles}>{textRecipeResult}</Markdown>
-                  {shoppingList && shoppingList.length > 0 && (
-                    <View style={styles.commerceSection}>
-                      <Text style={styles.commerceTitle}>🛒 부족한 필수 재료 바로 구매하기</Text>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap: 10}}>
-                        {shoppingList.map((item, idx) => (
-                          <TouchableOpacity key={idx} style={styles.commerceBtn} onPress={() => handleShopping(item)}><Text style={styles.commerceBtnText}>{item} 검색 🔍</Text></TouchableOpacity>
-                        ))}
-                      </ScrollView>
-                    </View>
-                  )}
-                  <View style={{height: 40}} /> 
-                </ScrollView>
-              )}
-            </View>
-
-            {!isGeneratingRecipe && textRecipeResult && (
-              <View style={styles.resultButtonsGrid}>
-                <TouchableOpacity style={[styles.gridBtn, {backgroundColor: '#FF6B6B', flex: 0.8}]} onPress={() => handleRecipeSaveAndShare(false)}><Text style={styles.gridBtnText}>저장</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.gridBtn, {backgroundColor: '#4CAF50', flex: 1.1}]} onPress={() => handleRecipeSaveAndShare(true)}><Text style={styles.gridBtnText}>광장 공유 🌍</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.gridBtn, {backgroundColor: '#8E24AA', flex: 1.4}]} onPress={() => { setShowStyleModal(true); }}><Text style={styles.gridBtnText}>레시피 수정 🎲</Text></TouchableOpacity>
-              </View>
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* 스타일 모달 */}
-      <Modal visible={showStyleModal} transparent={true} animationType="fade" onRequestClose={() => setShowStyleModal(false)}>
-        <View style={styles.modalOverlayCenter}>
-          <View style={[styles.bottomSheetContainer, {height: 'auto', maxHeight: '80%', paddingBottom: 30, borderTopLeftRadius: 20, borderTopRightRadius: 20, borderRadius: 20}]}>
-            <View style={styles.dragHandle} />
-            <Text style={styles.styleModalTitle}>🎲 어떤 스타일로 바꿀까요?</Text>
-            <ScrollView>
-              <Text style={styles.styleInputLabel}>1. 요리 종류 선택</Text>
-              <View style={styles.styleTagsContainer}>
-                {RECIPE_TYPES.map(type => (<TouchableOpacity key={type} style={[styles.styleTag, selectedType === type && !isCustomType && styles.styleTagActive]} onPress={() => { setIsCustomType(false); setSelectedType(type === selectedType ? "" : type); }}><Text style={[styles.styleTagText, selectedType === type && !isCustomType && styles.styleTagTextActive]}>{type}</Text></TouchableOpacity>))}
-                <TouchableOpacity style={[styles.styleTag, isCustomType && styles.styleTagActive]} onPress={() => { setIsCustomType(true); setSelectedType(""); }}><Text style={[styles.styleTagText, isCustomType && styles.styleTagTextActive]}>+ 직접 입력</Text></TouchableOpacity>
-              </View>
-              {isCustomType && (<TextInput style={styles.customTextInput} placeholder="예: 비건식, 중식 코스요리" maxLength={15} value={customTypeInput} onChangeText={setCustomTypeInput} />)}
-              
-              <Text style={[styles.styleInputLabel, {marginTop: 20}]}>2. 맛 / 분위기 선택 (선택사항)</Text>
-              <View style={styles.styleTagsContainer}>
-                {RECIPE_TASTES.map(taste => (<TouchableOpacity key={taste} style={[styles.styleTag, selectedTaste === taste && !isCustomTaste && styles.styleTagActive]} onPress={() => { setIsCustomTaste(false); setSelectedTaste(taste === selectedTaste ? "" : taste); }}><Text style={[styles.styleTagText, selectedTaste === taste && !isCustomTaste && styles.styleTagTextActive]}>{taste}</Text></TouchableOpacity>))}
-                <TouchableOpacity style={[styles.styleTag, isCustomTaste && styles.styleTagActive]} onPress={() => { setIsCustomTaste(true); setSelectedTaste(""); }}><Text style={[styles.styleTagText, isCustomTaste && styles.styleTagTextActive]}>+ 직접 입력</Text></TouchableOpacity>
-              </View>
-              {isCustomTaste && (<TextInput style={styles.customTextInput} placeholder="예: 미슐랭 3스타 느낌" maxLength={15} value={customTasteInput} onChangeText={setCustomTasteInput} />)}
-              
-              <View style={styles.styleModalButtons}>
-                <TouchableOpacity style={styles.styleModalCancel} onPress={() => setShowStyleModal(false)}><Text style={styles.styleModalBtnText}>취소</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.styleModalSave} onPress={requestNewStyle}><Text style={styles.styleModalBtnTextWhite}>추천받기 ✨</Text></TouchableOpacity>
-              </View>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal visible={isCookingMode} transparent={false} animationType="slide">
-        <SafeAreaView style={styles.ttsContainer}>
-          <View style={styles.ttsHeader}>
-            <Text style={styles.ttsStepIndicator}>조리 단계 {currentStepIndex + 1} / {cookingSteps.length}</Text>
-            <TouchableOpacity onPress={handleExitCookingMode} style={styles.ttsCloseBtn}><Text style={styles.ttsCloseBtnText}>종료 ✕</Text></TouchableOpacity>
-          </View>
-          <View style={styles.ttsBody}><Text style={styles.ttsBigText}>{cookingSteps[currentStepIndex]}</Text></View>
-          <View style={styles.ttsControls}>
-            <TouchableOpacity style={[styles.ttsBtn, currentStepIndex === 0 && {opacity: 0.3}]} onPress={handlePrevStep} disabled={currentStepIndex === 0}><Text style={styles.ttsBtnText}>⬅️ 이전</Text></TouchableOpacity>
-            <TouchableOpacity style={styles.ttsBtnMain} onPress={handleReplayStep}><Text style={styles.ttsBtnMainText}>🔊 다시 듣기</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.ttsBtn, currentStepIndex === cookingSteps.length - 1 && {opacity: 0.3}]} onPress={handleNextStep} disabled={currentStepIndex === cookingSteps.length - 1}><Text style={styles.ttsBtnText}>다음 ➡️</Text></TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      </Modal>
+      </View>
     </SafeAreaView>
   );
 }
 
-const markdownStyles = StyleSheet.create({ body: { color: '#3A2E2B', fontSize: 15, lineHeight: 24 }, heading1: { color: '#FF8C00', fontSize: 22, fontWeight: 'bold' }, blockquote: { backgroundColor: '#F9F5F3', borderLeftWidth: 4, borderLeftColor: '#4CAF50', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5, marginVertical: 10 }});
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.bgMain }, 
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 40, marginBottom: 15 },
-  greeting: { fontSize: 22, fontWeight: '900', color: Colors.textMain, marginBottom: 5 },
-  subGreeting: { fontSize: 14, color: Colors.textSub },
-  levelBadge: { backgroundColor: Colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 15, marginBottom: 5 },
-  levelText: { color: Colors.textMain, fontSize: 12, fontWeight: 'bold' },
-  expText: { color: Colors.primary, fontSize: 12, fontWeight: 'bold' },
-  
-  qaButton: { backgroundColor: Colors.bgCard, padding: 12, borderRadius: Radius.sm, alignItems: 'center' },
-  qaButtonText: { color: Colors.textMain, fontWeight: 'bold', fontSize: 13 },
-
-  banner: { width: '100%', height: 160, borderRadius: Radius.lg, marginBottom: 25, overflow: 'hidden' },
-  bannerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 20 },
-  bannerTitle: { color: '#fff', fontSize: 24, fontWeight: '900', marginBottom: 5 },
-  bannerSub: { color: Colors.textMain, fontSize: 14, opacity: 0.9 },
-  
-  scanSection: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: Colors.border },
-  scanInfoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-  scanTitle: { fontSize: 18, fontWeight: 'bold', color: Colors.textMain },
-  quotaBadge: { backgroundColor: Colors.bgMain, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15 },
-  quotaText: { color: Colors.primary, fontSize: 12, fontWeight: 'bold' },
-  scanButton: { backgroundColor: Colors.primary, paddingVertical: 18, borderRadius: Radius.md, alignItems: 'center', ...Shadows.glow },
-  scanButtonText: { color: Colors.textMain, fontSize: 18, fontWeight: '900' },
-
-  manualInputContainer: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, padding: 20, marginBottom: 30, borderWidth: 1, borderColor: Colors.border, shadowColor: '#000', shadowOffset: {width:0, height:2}, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
-  manualInputTitle: { fontSize: 18, fontWeight: 'bold', color: Colors.textMain, marginBottom: 15 }, 
-  sectionLabel: { fontSize: 13, fontWeight: 'bold', color: Colors.textSub, marginBottom: 8 },
-  quickTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 15 },
-  quickTag: { backgroundColor: Colors.bgMain, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, borderColor: Colors.border },
-  quickTagText: { color: Colors.textSub, fontSize: 12, fontWeight: 'bold' },
-  selectedTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 },
-  tagBadgeActive: { paddingVertical: 8, paddingHorizontal: 14, backgroundColor: Colors.primary, borderRadius: 20 },
-  tagTextActive: { color: Colors.textMain, fontSize: 13, fontWeight: 'bold' },
-  inlineInputRow: { flexDirection: 'row', gap: 10, marginBottom: 10, alignItems: 'center' },
-  manualInputBox: { flex: 1, backgroundColor: Colors.bgMain, borderRadius: 14, paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: Colors.textMain, borderWidth: 1, borderColor: Colors.border },
-  addBtn: { backgroundColor: Colors.bgMain, paddingHorizontal: 20, paddingVertical: 14, justifyContent: 'center', alignItems: 'center', borderRadius: 14, borderWidth: 1, borderColor: Colors.border },
-  addBtnText: { color: Colors.textMain, fontSize: 14, fontWeight: 'bold' },
-  autocompleteContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15, padding: 10, backgroundColor: Colors.bgMain, borderRadius: 10 },
-  tagBadge: { paddingVertical: 8, paddingHorizontal: 14, backgroundColor: Colors.bgCard, borderRadius: 20, borderWidth: 1, borderColor: Colors.border },
-  tagText: { color: Colors.textMain, fontSize: 13, fontWeight: 'bold' },
-  customAddBadge: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: Colors.primary, borderRadius: 10, borderWidth: 1, borderColor: Colors.primary, width: '100%', alignItems: 'center' },
-  customAddText: { color: Colors.textMain, fontSize: 14, fontWeight: 'bold' },
-  manualSubmitBtn: { backgroundColor: '#4CAF50', paddingVertical: 16, alignItems: 'center', borderRadius: 14, marginTop: 10 }, // Keep specific color for success action
-  manualSubmitText: { color: Colors.textMain, fontSize: 16, fontWeight: '900' },
-  
-  categorySection: { marginBottom: 20 },
-  categoryHeader: { fontSize: 18, fontWeight: 'bold', color: Colors.textMain, marginBottom: 15 },
-  categoryScroll: { gap: 12 },
-  categoryCard: { backgroundColor: Colors.bgCard, padding: 15, borderRadius: 15, alignItems: 'center', width: 110, borderWidth: 1, borderColor: Colors.border },
-  categoryEmoji: { fontSize: 30, marginBottom: 8 },
-  categoryText: { color: Colors.textSub, fontSize: 12, fontWeight: 'bold', textAlign: 'center' },
-
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' }, 
-  modalOverlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 20 },
-  bottomSheetContainer: { height: '88%', backgroundColor: Colors.bgModal, borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingHorizontal: 20, paddingBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -5 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 10 }, 
-  bottomSheetContainerWrapper: { width: '100%', justifyContent: 'flex-end' }, 
-  dragHandle: { width: 50, height: 5, backgroundColor: '#E8D5D0', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 15 }, 
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#E8D5D0', marginBottom: 15 }, 
-  modalTitleText: { fontSize: 18, color: Colors.textInverse, fontWeight: '900' }, 
-  closeButton: { backgroundColor: '#F5EBE7', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 20 }, 
-  closeButtonText: { color: Colors.textInverse, fontSize: 14, fontWeight: 'bold' }, 
-  modalBody: { flex: 1, justifyContent: 'center' }, 
-  loadingBox: { alignItems: 'center', paddingVertical: 50 }, 
-  loadingText: { color: Colors.primary, marginTop: 15, fontSize: 15, fontWeight: 'bold' }, 
-  recipeScroll: { flex: 1 }, 
-  resultButtonsGrid: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, marginTop: 15 }, 
-  gridBtn: { paddingVertical: 14, borderRadius: Radius.sm, alignItems: 'center', justifyContent: 'center' }, 
-  gridBtnText: { color: Colors.textMain, fontSize: 14, fontWeight: 'bold' }, 
-  themeCard: { backgroundColor: Colors.bgModal, borderRadius: Radius.md, padding: 20, marginBottom: 15, borderWidth: 1, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2 }, 
-  commerceSection: { marginTop: 20, paddingVertical: 15, borderTopWidth: 1, borderTopColor: '#E8D5D0' }, 
-  commerceTitle: { fontSize: 15, fontWeight: '900', color: '#8E24AA', marginBottom: 12 }, 
-  commerceBtn: { backgroundColor: '#fff', paddingVertical: 10, paddingHorizontal: 15, borderRadius: 20, borderWidth: 1, borderColor: '#E8D5D0', shadowColor: '#000', shadowOffset: {width:0, height:2}, shadowOpacity: 0.05, shadowRadius: 3, elevation: 2 }, 
-  commerceBtnText: { color: Colors.textInverse, fontSize: 13, fontWeight: 'bold' },
-  
-  ttsStartBtn: { backgroundColor: '#E3F2FD', paddingVertical: 15, borderRadius: 15, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#CE93D8' }, ttsStartBtnText: { color: '#8E24AA', fontSize: 15, fontWeight: '900' }, ttsContainer: { flex: 1, backgroundColor: '#2A2421', padding: 20, justifyContent: 'space-between' }, ttsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 }, ttsStepIndicator: { color: '#FFB347', fontSize: 18, fontWeight: 'bold' }, ttsCloseBtn: { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 20 }, ttsCloseBtnText: { color: '#fff', fontWeight: 'bold' }, ttsBody: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10 }, ttsBigText: { color: '#FFFDF9', fontSize: 32, fontWeight: '900', textAlign: 'center', lineHeight: 45 }, ttsControls: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 }, ttsBtn: { backgroundColor: '#4A3F3A', paddingVertical: 20, flex: 1, borderRadius: 20, alignItems: 'center', marginHorizontal: 5 }, ttsBtnText: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold' }, ttsBtnMain: { backgroundColor: '#FF8C00', paddingVertical: 25, flex: 1.5, borderRadius: 25, alignItems: 'center', marginHorizontal: 5, shadowColor: '#FF8C00', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 }, ttsBtnMainText: { color: '#fff', fontSize: 18, fontWeight: '900' },
-  
-  styleModalTitle: { color: '#8E24AA', fontSize: 20, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' }, styleInputLabel: { color: '#3A2E2B', fontSize: 14, fontWeight: 'bold', marginBottom: 8, marginTop: 10 }, styleTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5 }, styleTag: { paddingVertical: 10, paddingHorizontal: 15, backgroundColor: '#F9F5F3', borderRadius: 20, borderWidth: 1, borderColor: '#E8D5D0' }, styleTagActive: { backgroundColor: '#8E24AA', borderColor: '#AB47BC' }, styleTagText: { color: '#8C7A76', fontSize: 13, fontWeight: 'bold' }, styleTagTextActive: { color: '#fff', fontSize: 13, fontWeight: 'bold' }, customTextInput: { backgroundColor: '#FFFDF9', color: '#3A2E2B', paddingHorizontal: 15, paddingVertical: 12, borderRadius: 10, fontSize: 14, borderWidth: 1, borderColor: '#8E24AA', marginTop: 10 }, styleModalButtons: { flexDirection: 'row', justifyContent: 'center', gap: 15, width: '100%', marginTop: 25 }, styleModalCancel: { backgroundColor: '#F5EBE7', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flex: 1 }, styleModalSave: { backgroundColor: '#8E24AA', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flex: 1.5 }, styleModalBtnText: { color: '#8C7A76', fontWeight: 'bold', fontSize: 15, textAlign: 'center' }, styleModalBtnTextWhite: { color: '#fff', fontWeight: 'bold', fontSize: 15, textAlign: 'center' },
-
-  // 🚨 [신규 추가] 법적 면책 팝업 전용 스타일
-  legalModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  legalModalContent: { width: '100%', maxHeight: '85%', backgroundColor: Colors.bgModal, borderRadius: Radius.lg, padding: 25, shadowColor: '#000', shadowOffset: {width:0, height:10}, shadowOpacity: 0.3, shadowRadius: 20, elevation: 15 },
-  legalModalTitle: { fontSize: 22, fontWeight: '900', color: '#D32F2F', textAlign: 'center', marginBottom: 20 },
-  legalScrollView: { marginBottom: 20 },
-  legalMainText: { fontSize: 15, color: Colors.textInverse, fontWeight: 'bold', marginBottom: 20, textAlign: 'center', lineHeight: 22 },
-  legalPointBox: { backgroundColor: '#FFEBEE', padding: 15, borderRadius: 12, marginBottom: 15, borderWidth: 1, borderColor: '#FFCDD2' },
-  legalPointTitle: { fontSize: 16, fontWeight: '900', color: '#C62828', marginBottom: 6 },
-  legalPointDesc: { fontSize: 14, color: Colors.textInverse, lineHeight: 20 },
-  legalFooterText: { fontSize: 12, color: '#8C7A76', textAlign: 'center', marginTop: 10, fontWeight: 'bold' },
-  legalAgreeButton: { backgroundColor: '#4CAF50', paddingVertical: 18, borderRadius: Radius.md, alignItems: 'center', shadowColor: '#4CAF50', shadowOpacity: 0.4, shadowRadius: 8, elevation: 5 },
-  legalAgreeButtonText: { color: Colors.textMain, fontSize: 16, fontWeight: '900' },
-  modalContent: { backgroundColor: Colors.bgCard, borderRadius: Radius.lg, padding: 25, borderWidth: 1, borderColor: Colors.primary, position: 'relative', width: '90%' },
-  modalTitle: { fontSize: 22, fontWeight: '900', color: Colors.primary, marginBottom: 10, textAlign: 'center' },
-  modalSub: { fontSize: 14, color: Colors.textMain, textAlign: 'center', marginBottom: 20 },
-  styleInput: { backgroundColor: Colors.bgMain, color: Colors.textMain, borderRadius: 12, padding: 15, fontSize: 16, borderWidth: 1, borderColor: Colors.border, marginBottom: 20 },
-  generateBtn: { backgroundColor: Colors.primary, paddingVertical: 16, borderRadius: Radius.md, alignItems: 'center', marginBottom: 12 },
-  generateBtnText: { color: Colors.textInverse, fontSize: 16, fontWeight: '900' },
-  skipBtn: { paddingVertical: 10, alignItems: 'center' },
-  skipBtnText: { color: Colors.textSub, fontSize: 14, fontWeight: 'bold', textDecorationLine: 'underline' },
-  themeSection: { marginTop: 30, marginBottom: 20 },
-  themeSectionTitle: { fontSize: 18, fontWeight: '900', color: Colors.textMain, marginBottom: 15, marginLeft: 5 },
-  themeScroll: { gap: 12, paddingHorizontal: 5, paddingBottom: 10, paddingRight: 20 },
-  themeCard: { backgroundColor: Colors.bgCard, padding: 16, borderRadius: Radius.md, width: 140, borderWidth: 1, borderColor: Colors.border, shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.2, shadowRadius: 4, elevation: 3 },
-  themeCardTitle: { fontSize: 15, fontWeight: 'bold', color: Colors.primary, marginBottom: 5 },
-  themeCardDesc: { fontSize: 12, color: Colors.textSub },
-  closeIconBtn: { position: 'absolute', top: 15, right: 15, padding: 5, zIndex: 10 },
-  closeIconText: { color: Colors.textSub, fontSize: 18, fontWeight: 'bold' },
-  rouletteFab: { position: 'absolute', top: 50, right: 20, backgroundColor: Colors.bgCard, padding: 12, borderRadius: 30, borderWidth: 1, borderColor: Colors.primary, zIndex: 10, shadowColor: Colors.primary, shadowOpacity: 0.5, shadowRadius: 8, elevation: 5 },
-  rouletteFabIcon: { fontSize: 24 },
-  rouletteRedDot: { position: 'absolute', top: 0, right: 0, width: 12, height: 12, backgroundColor: '#E53935', borderRadius: 6, borderWidth: 2, borderColor: Colors.bgMain },
-  rouletteModalContent: { backgroundColor: Colors.bgMain, borderRadius: Radius.lg, padding: 25, borderWidth: 2, borderColor: '#4CAF50', position: 'relative', width: '90%', alignItems: 'center', shadowColor: '#4CAF50', shadowOpacity: 0.3, shadowRadius: 20, elevation: 15 },
-  rouletteTitle: { fontSize: 24, fontWeight: '900', color: '#4CAF50', marginBottom: 5 },
-  rouletteSub: { fontSize: 13, color: Colors.textSub, marginBottom: 20 },
-  rouletteWheelBox: { width: '100%', height: 150, backgroundColor: Colors.bgCard, borderRadius: Radius.md, justifyContent: 'center', alignItems: 'center', marginBottom: 20, borderWidth: 1, borderColor: Colors.border, padding: 20 },
-  spinningText: { color: Colors.primary, fontSize: 18, fontWeight: 'bold', fontStyle: 'italic' },
-  readyText: { color: Colors.textMain, fontSize: 16, fontWeight: 'bold' },
-  resultLabel: { color: Colors.primary, fontSize: 14, fontWeight: 'bold', marginBottom: 10 },
-  resultText: { color: Colors.textMain, fontSize: 18, fontWeight: '900', textAlign: 'center', lineHeight: 28 },
-  spinBtn: { backgroundColor: Colors.primary, paddingVertical: 16, width: '100%', borderRadius: Radius.md, alignItems: 'center' },
-  spinBtnText: { color: Colors.textInverse, fontSize: 16, fontWeight: '900' },
-
-  heroBanner: { borderRadius: Radius.lg, marginTop: 10, marginBottom: 25, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 10, elevation: 10, overflow: 'hidden', backgroundColor: Colors.bgCard },
-  heroBackground: { width: '100%', height: 150, justifyContent: 'center' },
-  heroOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', paddingHorizontal: 25 },
-  heroTitle: { fontSize: 26, fontWeight: '900', color: Colors.textMain, marginBottom: 10 },
-  heroSub: { fontSize: 14, color: Colors.textMain, fontWeight: 'bold', opacity: 0.9 },
-  
-  modernGrid: { gap: 12, marginBottom: 35, paddingHorizontal: 5 },
-  gridRow: { flexDirection: 'row', gap: 12 },
-  modernGridCard: { 
-    flex: 1, 
-    // 🚨 1. 히어로 배너와 동일한 모던 배경색 및 테두리 적용
-    backgroundColor: Colors.bgCard, 
-    borderWidth: 1, 
-    borderColor: Colors.border, 
-    borderRadius: Radius.lg, 
-    // 🚨 2. 가로가 더 긴 2x1 형태의 비율(Aspect Ratio) 강제 적용
-    aspectRatio: 1.8, 
-    shadowColor: '#000', 
-    shadowOffset: { width: 0, height: 4 }, 
-    shadowOpacity: 0.3, 
-    shadowRadius: 5, 
-    elevation: 5,
-    // 🚨 3. 내부 요소 완벽한 정 중앙 정렬
-    justifyContent: 'center',
-    alignItems: 'center', 
-    paddingHorizontal: 10,
+  container: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
   },
-  modernGridIcon: { fontSize: 32, marginBottom: 6 },
-  modernGridTitle: { fontSize: 16, fontWeight: '900', color: Colors.textMain, marginBottom: 4, textAlign: 'center' },
-  modernGridSub: { fontSize: 11, color: Colors.textSub, fontWeight: 'bold', textAlign: 'center' },
+  screenWrap: { flex: 1 },
+  bgNoise: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(28, 25, 23, 0.02)',
+  },
+  keyboardView: { flex: 1 },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 48,
+  },
+  glassCard: {
+    backgroundColor: Colors.glassBg,
+    borderWidth: 1,
+    borderColor: Colors.glassBorder,
+    ...Shadows.glass,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  headerLeft: {
+    flexShrink: 1,
+    paddingRight: 12,
+  },
+  headerRight: {
+    alignItems: 'flex-end',
+  },
+  logo: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: Colors.primary,
+    marginBottom: 6,
+    letterSpacing: -0.5,
+  },
+  greetingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  titlePill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primarySoft,
+  },
+  titlePillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  greeting: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: Colors.textSub,
+  },
+  levelBadgeWrap: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  levelBadgeOuter: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  levelBadgeRing: {
+    position: 'absolute',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 5,
+    // EXP 바 트랙 — 옅은 주황
+    borderColor: '#FED7AA',
+  },
+  levelBadgeInner: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    // 옅은 주황 배경
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1,
+    borderColor: 'rgba(253,186,116,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 0,
+    position: 'relative',
+  },
+  levelCrown: {
+    position: 'absolute',
+    top: -12,
+    left: '50%',
+    transform: [{ translateX: -10 }],
+    zIndex: 2,
+  },
+  levelCrownText: {
+    fontSize: 18,
+  },
+  levelNumber: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1F2937',
+    position: 'absolute',
+    bottom: 3,
+  },
+  levelLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#4B5563',
+    opacity: 0.8,
+    position: 'absolute',
+    top: 4,
+  },
+  searchBar: {
+    height: 52,
+    borderRadius: Radius.lg,
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+    marginBottom: 24,
+  },
+  searchPlaceholder: {
+    fontSize: 15,
+    color: Colors.textSub,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: Colors.textMain,
+    marginBottom: 12,
+    paddingHorizontal: 2,
+  },
+  clayChipWrap: {
+    alignItems: 'center',
+    minWidth: 72,
+  },
+  clayChipIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+    ...Shadows.clay,
+  },
+  clayChipLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textMain,
+    textAlign: 'center',
+    lineHeight: 14,
+  },
+  heroCtaShadowDiffused: {
+    ...Shadows.glassDiffused,
+  },
+  heroCtaTouch: {
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+  },
+  heroCtaShadowTight: {
+    ...Shadows.glassTight,
+  },
+  heroCtaInner: {
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    minHeight: 88,
+  },
+  heroCtaBgImage: {
+    borderRadius: Radius.lg,
+  },
+  heroCtaOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.32)',
+    borderRadius: Radius.lg,
+  },
+  heroCta: {
+    borderRadius: Radius.lg,
+    paddingVertical: 24,
+    paddingHorizontal: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  heroCtaIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: Radius.md,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...Shadows.clayInner,
+  },
+  heroCtaTextWrap: { flex: 1 },
+  heroCtaTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.textInverse,
+    marginBottom: 6,
+  },
+  heroCtaSub: {
+    fontSize: 14,
+    color: Colors.textInverse,
+    opacity: 0.95,
+  },
+  quickMenuUnderHero: {
+    marginBottom: 24,
+    gap: 10,
+  },
+  quickMenuRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  quickMenuPlaceholder: {
+    flex: 1,
+    minHeight: 60,
+  },
+  heroCtaSmallTouch: {
+    flex: 1,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+  },
+  heroCtaSmallShadowTight: {
+    ...Shadows.glassTight,
+  },
+  heroCtaSmallInner: {
+    borderRadius: Radius.md,
+    overflow: 'hidden',
+    minHeight: 60,
+  },
+  heroCtaSmall: {
+    borderRadius: Radius.md,
+    paddingVertical: 18,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 60,
+  },
+  heroCtaSmallIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.sm,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  heroCtaSmallIconWrapTinted: {
+    backgroundColor: 'rgba(28, 25, 23, 0.06)',
+  },
+  heroCtaSmallTitle: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textInverse,
+    lineHeight: 18,
+  },
+  heroCtaSmallTitleTinted: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textMain,
+    lineHeight: 18,
+  },
+  themeCardScroll: {
+    paddingHorizontal: 4,
+    paddingVertical: 8,
+  },
+  themeCard: {
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    ...Shadows.glass,
+  },
+  themeCardImage: {
+    width: '100%',
+    aspectRatio: 1.22,
+    justifyContent: 'flex-end',
+  },
+  themeCardImageStyle: {
+    borderRadius: Radius.lg,
+  },
+  themeCardGradient: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: '60%',
+    borderRadius: Radius.lg,
+  },
+  themeCardTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Colors.textInverse,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    paddingTop: 24,
+  },
+  legalOverlay: {
+    flex: 1,
+    backgroundColor: Colors.overlayDark,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  legalContent: {
+    width: '100%',
+    maxHeight: '85%',
+    backgroundColor: Colors.bgModal,
+    borderRadius: Radius.lg,
+    padding: 24,
+    ...Shadows.soft,
+  },
+  legalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.danger,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  legalScroll: { marginBottom: 16 },
+  legalIntro: {
+    fontSize: 14,
+    color: Colors.textMain,
+    marginBottom: 16,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  legalPoint: {
+    backgroundColor: Colors.bgMuted,
+    padding: 14,
+    borderRadius: Radius.md,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  legalPointTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.danger,
+    marginBottom: 6,
+  },
+  legalPointDesc: {
+    fontSize: 13,
+    color: Colors.textMain,
+    lineHeight: 20,
+  },
+  legalFooter: {
+    fontSize: 12,
+    color: Colors.textSub,
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 18,
+  },
+  legalAgreeBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    ...Shadows.glow,
+  },
+  legalAgreeBtnText: {
+    color: Colors.textInverse,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  themeModalOverlay: {
+    flex: 1,
+    backgroundColor: Colors.overlayDark,
+    justifyContent: 'flex-end',
+  },
+  themeModalContent: {
+    backgroundColor: Colors.bgModal,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    height: '82%',
+    maxHeight: '82%',
+    paddingBottom: 24,
+  },
+  themeModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  themeModalClose: { fontSize: 22, color: Colors.textSub, padding: 4 },
+  themeModalTitle: { fontSize: 18, fontWeight: '800', color: Colors.textMain, flex: 1, textAlign: 'center' },
+  themeModalScroll: { flex: 1, paddingHorizontal: 20, paddingTop: 16 },
+  themeModalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  themeModalLabel: { fontSize: 15, fontWeight: '700', color: Colors.textMain, marginBottom: 10 },
+  themeModalHint: { fontSize: 12, color: Colors.textSub, marginBottom: 12 },
+  themeModalCameraBtn: {
+    backgroundColor: Colors.bgMuted,
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  themeModalCameraText: { fontSize: 15, fontWeight: '600', color: Colors.textMain },
+  themeModalChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  themeModalChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.bgMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  themeModalChipActive: { backgroundColor: Colors.primarySoft, borderColor: Colors.primary },
+  themeModalChipText: { fontSize: 13, fontWeight: '600', color: Colors.textMain },
+  themeModalChipTextActive: { color: Colors.primary },
+  themeModalInputRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  themeModalInput: {
+    flex: 1,
+    backgroundColor: Colors.bgMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.textMain,
+  },
+  themeModalAddBtn: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 18,
+    borderRadius: Radius.md,
+    justifyContent: 'center',
+  },
+  themeModalAddBtnText: { color: Colors.textInverse, fontWeight: '700', fontSize: 14 },
+  themeModalSelectedWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  themeModalSelectedChip: {
+    backgroundColor: Colors.primarySoft,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Radius.pill,
+  },
+  themeModalSelectedText: { fontSize: 13, color: Colors.primary, fontWeight: '600' },
+  themeModalSubmitBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    ...Shadows.glow,
+  },
+  themeModalSubmitText: { color: Colors.textInverse, fontSize: 16, fontWeight: '800' },
 });

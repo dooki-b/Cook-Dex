@@ -1,8 +1,10 @@
 // 파일 위치: app/(tabs)/recipes.tsx
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Voice from '@react-native-voice/voice';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useFocusEffect } from 'expo-router';
 import * as Speech from 'expo-speech';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, FlatList, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,12 +14,28 @@ export default function RecipesScreen() {
   const [selectedRecipe, setSelectedRecipe] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [shoppingModalVisible, setShoppingModalVisible] = useState(false);
+  const [measureModalVisible, setMeasureModalVisible] = useState(false);
   const [searchIngredient, setSearchIngredient] = useState("");
 
   // 🚨 TTS 조리 모드 상태
   const [isCookingMode, setIsCookingMode] = useState(false);
   const [cookingSteps, setCookingSteps] = useState([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
+
+  useEffect(() => {
+    Voice.onSpeechResults = (e) => {
+      const text = e.value[0]?.toLowerCase() || "";
+      if (text.includes('다음') || text.includes('next')) {
+        // '다음'이라고 말하면 다음 스텝으로 이동
+        setCurrentStepIndex(prev => Math.min(prev + 1, cookingSteps.length - 1));
+      } else if (text.includes('이전') || text.includes('back')) {
+        // '이전'이라고 말하면 이전 스텝으로 이동
+        setCurrentStepIndex(prev => Math.max(prev - 1, 0));
+      }
+    };
+    return () => { Voice.destroy().then(Voice.removeAllListeners); };
+  }, [cookingSteps.length]);
 
   const handleShoppingSearch = () => {
     if (!searchIngredient.trim()) {
@@ -66,31 +84,62 @@ export default function RecipesScreen() {
   };
 
   // 🚨 TTS 조리 모드 함수
-  const startCookingMode = () => {
+  const startCookingMode = async () => {
     if (!selectedRecipe) return;
     const extractedSteps = selectedRecipe.content.split('\n').filter(line => /^\d+\.\s/.test(line.trim())).map(line => line.replace(/^\d+\.\s/, '').replace(/\*\*/g, '').trim());
     if (extractedSteps.length === 0) { Alert.alert("알림", "조리 단계를 인식하지 못했습니다."); return; }
     setCookingSteps(extractedSteps); setCurrentStepIndex(0); setIsCookingMode(true);
     Speech.speak(extractedSteps[0], { language: 'ko-KR', rate: 0.95, pitch: 1.0 });
+
+    const checkSettings = async () => {
+      const wakelock = await AsyncStorage.getItem('cookdex_setting_wakelock');
+      const voice = await AsyncStorage.getItem('cookdex_setting_voice');
+      if (wakelock === 'true') {
+        try { await activateKeepAwakeAsync(); } catch(e){}
+      }
+      if (voice === 'true') {
+        setIsVoiceActive(true);
+        try { await Voice.start('ko-KR'); } catch(e) { console.log("음성 모듈 초기화 필요", e); }
+      }
+    };
+    checkSettings();
   };
   const handleNextStep = () => { if (currentStepIndex < cookingSteps.length - 1) { Speech.stop(); setCurrentStepIndex(prev => prev + 1); Speech.speak(cookingSteps[currentStepIndex + 1], { language: 'ko-KR', rate: 0.95 }); } };
   const handlePrevStep = () => { if (currentStepIndex > 0) { Speech.stop(); setCurrentStepIndex(prev => prev - 1); Speech.speak(cookingSteps[currentStepIndex - 1], { language: 'ko-KR', rate: 0.95 }); } };
   const handleReplayStep = () => { Speech.stop(); Speech.speak(cookingSteps[currentStepIndex], { language: 'ko-KR', rate: 0.95 }); };
-  const handleExitCookingMode = () => { Speech.stop(); setIsCookingMode(false); };
+  const handleExitCookingMode = async () => { Speech.stop(); setIsCookingMode(false); try { await deactivateKeepAwake(); } catch(e){} try { await Voice.stop(); } catch(e){} setIsVoiceActive(false); };
+
+  const handleVerifyCooking = async () => {
+    // 실제 배포 시에는 expo-image-picker로 카메라 연동하지만, 일단 게이미피케이션 로직을 위해 Mock 구현
+    Alert.alert(
+      "📸 요리 완성 인증", 
+      "카메라가 열립니다... (찰칵!)\n\n인증이 완료되었습니다!\n막대한 보상이 지급됩니다.", 
+      [{ text: "보상 받기", onPress: async () => {
+        try {
+          const currentExp = parseInt(await AsyncStorage.getItem('cookdex_user_exp') || '0');
+          await AsyncStorage.setItem('cookdex_user_exp', (currentExp + 50).toString()); // 50 EXP 폭발
+          Alert.alert("🎉 레벨업 임박!", "요리 인증 성공! +50 EXP 획득!");
+        } catch (e) { console.error("EXP 갱신 에러"); }
+      }}]
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       {/* 상단 헤더 */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>내 주방 🍳</Text>
-        <Text style={styles.headerSub}>내가 저장한 비밀 레시피 북</Text>
+        <Text style={styles.headerTitle}>내 주방</Text>
+        <Text style={styles.headerSub}>내가 저장한 레시피 북</Text>
       </View>
+
+      <TouchableOpacity style={styles.measureGuideBtn} onPress={() => setMeasureModalVisible(true)}>
+        <Text style={styles.measureGuideBtnText}>기본 계량 가이드</Text>
+      </TouchableOpacity>
 
       {/* 레시피 리스트 렌더링 */}
       {savedRecipes.length === 0 ? (
         <View style={styles.emptyState}>
-          <Text style={styles.emptyEmoji}>🫙</Text>
-          <Text style={styles.emptyText}>아직 저장된 레시피가 없어요!</Text>
+          <Text style={styles.emptyText}>아직 저장된 레시피가 없습니다.</Text>
           <Text style={styles.emptySubText}>홈이나 스캐너에서 레시피를 만들어 저장해보세요.</Text>
         </View>
       ) : (
@@ -129,14 +178,19 @@ export default function RecipesScreen() {
             <ScrollView showsVerticalScrollIndicator={false} style={styles.markdownScroll}>
               {/* 🚨 TTS 시작 버튼 추가 */}
               <TouchableOpacity style={styles.ttsStartBtn} onPress={startCookingMode}>
-                <Text style={styles.ttsStartBtnText}>🔊 화면 안 보고 귀로 듣기 (조리 모드)</Text>
+                <Text style={styles.ttsStartBtnText}>조리 모드로 듣기</Text>
               </TouchableOpacity>
               {selectedRecipe && <Markdown style={markdownStyles}>{selectedRecipe.content}</Markdown>}
               <View style={{height: 30}}/>
             </ScrollView>
 
+            {/* 🚨 추가될 요리 인증 버튼 */}
+            <TouchableOpacity style={{backgroundColor: '#4CAF50', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginTop: 15}} onPress={handleVerifyCooking}>
+              <Text style={{color: '#fff', fontSize: 16, fontWeight: '900'}}>요리 완성 인증하기</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.shoppingBtn} onPress={() => setShoppingModalVisible(true)}>
-              <Text style={styles.shoppingBtnText}>🛒 부족한 재료 온라인 검색</Text>
+              <Text style={styles.shoppingBtnText}>부족한 재료 온라인 검색</Text>
             </TouchableOpacity>
             {/* 🚨 버튼 간격 축소 (20 -> 10) */}
             <View style={{height: 10}}/>
@@ -156,7 +210,7 @@ export default function RecipesScreen() {
         >
           <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setShoppingModalVisible(false)} />
           <View style={styles.shoppingModalContent}>
-            <Text style={styles.shoppingTitle}>🛒 온라인 장보기</Text>
+              <Text style={styles.shoppingTitle}>온라인 장보기</Text>
             <Text style={styles.shoppingSub}>부족한 식재료를 온라인에서 바로 검색해 보세요.</Text>
             <TextInput 
               style={styles.styleInput} 
@@ -180,13 +234,39 @@ export default function RecipesScreen() {
             <Text style={styles.ttsStepIndicator}>조리 단계 {currentStepIndex + 1} / {cookingSteps.length}</Text>
             <TouchableOpacity onPress={handleExitCookingMode} style={styles.ttsCloseBtn}><Text style={styles.ttsCloseBtnText}>종료 ✕</Text></TouchableOpacity>
           </View>
-          <View style={styles.ttsBody}><Text style={styles.ttsBigText}>{cookingSteps[currentStepIndex]}</Text></View>
+          <View style={styles.ttsBody}>
+            {isVoiceActive && (
+              <View style={{ backgroundColor: 'rgba(255, 140, 0, 0.2)', padding: 10, borderRadius: 20, marginBottom: 20, borderWidth: 1, borderColor: '#FF8C00' }}>
+                <Text style={{ color: '#FFB347', fontWeight: 'bold' }}>음성 명령 활성화됨 ("다음", "이전" 대기 중)</Text>
+              </View>
+            )}
+            <Text style={styles.ttsBigText}>{cookingSteps[currentStepIndex]}</Text>
+          </View>
           <View style={styles.ttsControls}>
             <TouchableOpacity style={[styles.ttsBtn, currentStepIndex === 0 && {opacity: 0.3}]} onPress={handlePrevStep} disabled={currentStepIndex === 0}><Text style={styles.ttsBtnText}>⬅️ 이전</Text></TouchableOpacity>
             <TouchableOpacity style={styles.ttsBtnMain} onPress={handleReplayStep}><Text style={styles.ttsBtnMainText}>🔊 다시 듣기</Text></TouchableOpacity>
             <TouchableOpacity style={[styles.ttsBtn, currentStepIndex === cookingSteps.length - 1 && {opacity: 0.3}]} onPress={handleNextStep} disabled={currentStepIndex === cookingSteps.length - 1}><Text style={styles.ttsBtnText}>다음 ➡️</Text></TouchableOpacity>
           </View>
         </SafeAreaView>
+      </Modal>
+
+      <Modal visible={measureModalVisible} transparent={true} animationType="fade" onRequestClose={() => setMeasureModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.measureModalContent}>
+            <Text style={styles.measureTitle}>쿡덱스 기본 계량표</Text>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.measureItem}>• 1큰술 (1T) = 15ml (어른 밥숟가락 1가득)</Text>
+              <Text style={styles.measureItem}>• 1작은술 (1t) = 5ml (티스푼 1가득)</Text>
+              <Text style={styles.measureItem}>• 1컵 (1Cup) = 200ml (일반 종이컵 가득)</Text>
+              <Text style={styles.measureItem}>• 1꼬집 = 엄지와 검지로 집은 양 (약 2g)</Text>
+              <Text style={styles.measureItem}>• 약간 = 2~3꼬집 정도의 양</Text>
+              <Text style={styles.measureItem}>• 한 줌 = 한 손에 가득 쥐어지는 양</Text>
+            </ScrollView>
+            <TouchableOpacity style={styles.measureCloseBtn} onPress={() => setMeasureModalVisible(false)}>
+              <Text style={styles.measureCloseBtnText}>확인했습니다</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -250,4 +330,12 @@ const styles = StyleSheet.create({
   ttsBtnText: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold' }, 
   ttsBtnMain: { backgroundColor: '#FF8C00', paddingVertical: 25, flex: 1.5, borderRadius: 25, alignItems: 'center', marginHorizontal: 5, shadowColor: '#FF8C00', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 }, 
   ttsBtnMainText: { color: '#fff', fontSize: 18, fontWeight: '900' },
+
+  measureGuideBtn: { backgroundColor: '#4A3F3A', marginHorizontal: 20, marginTop: 15, paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
+  measureGuideBtnText: { color: '#FFB347', fontSize: 14, fontWeight: 'bold' },
+  measureModalContent: { backgroundColor: '#2A2421', borderRadius: 20, padding: 25, borderWidth: 1, borderColor: '#FF8C00', width: '90%', alignSelf: 'center' },
+  measureTitle: { color: '#FF8C00', fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
+  measureItem: { color: '#FFFDF9', fontSize: 15, marginBottom: 12, lineHeight: 22 },
+  measureCloseBtn: { backgroundColor: '#FF8C00', paddingVertical: 15, borderRadius: 12, alignItems: 'center', marginTop: 20 },
+  measureCloseBtnText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
 });

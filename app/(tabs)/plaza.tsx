@@ -1,20 +1,27 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as Speech from 'expo-speech';
-import { collection, doc, getDocs, increment, limit, orderBy, query, updateDoc } from 'firebase/firestore';
-import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Linking, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { collection, doc, getDocs, increment, limit, orderBy, query, updateDoc, where } from 'firebase/firestore';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Linking, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import { db } from '../../firebaseConfig';
 
 const DAILY_PLAZA_LIMIT = 5;
 
 export default function PlazaScreen() {
+  const router = useRouter();
   const [globalRecipes, setGlobalRecipes] = useState([]);
+  const [posts, setPosts] = useState([]);
   const [topRecipes, setTopRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedRecipe, setSelectedRecipe] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
+  
+  // 💬 댓글 시스템 상태
+  const [commentModalVisible, setCommentModalVisible] = useState(false);
+  const [targetPost, setTargetPost] = useState(null);
+  const [commentInput, setCommentInput] = useState("");
 
   // BM 및 열람 제한 상태
   const [isProUser, setIsProUser] = useState(false); 
@@ -24,6 +31,12 @@ export default function PlazaScreen() {
   // 상태(State) 및 메모이제이션 추가:
   const [myCondiments, setMyCondiments] = useState([]);
   const [isFilterActive, setIsFilterActive] = useState(false);
+  
+  // 🔍 검색 및 태그 필터 상태 (New)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedTag, setSelectedTag] = useState("전체");
+  const filterTags = ["전체", "다이어트", "야식", "초간단", "매콤한"];
+  const [activeTab, setActiveTab] = useState('explore'); // 'explore' | 'custom'
 
   // TTS 조리 모드 상태
   const [isCookingMode, setIsCookingMode] = useState(false);
@@ -43,6 +56,19 @@ export default function PlazaScreen() {
     setShoppingModalVisible(false);
     setSearchIngredient("");
   };
+
+  useEffect(() => {
+    const fetchPlazaRecipes = async () => {
+      try {
+        // isPublic이 true인 레시피만 광장에 노출
+        const q = query(collection(db, "recipes"), where("isPublic", "==", true));
+        const querySnapshot = await getDocs(q);
+        const fetchedPosts = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setPosts(fetchedPosts.length > 0 ? fetchedPosts : []); // 데이터가 없으면 빈 배열
+      } catch(e) { console.log("광장 DB 연동 대기 중...", e); }
+    };
+    fetchPlazaRecipes();
+  }, []);
 
   // 화면 진입 시 DB 피드와 일일 열람 횟수 로드
   useFocusEffect(
@@ -176,22 +202,63 @@ export default function PlazaScreen() {
   const formatDate = (isoString) => { if (!isoString) return ""; const date = new Date(isoString); return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`; };
 
   const displayedRecipes = React.useMemo(() => {
-    if (!isFilterActive || myCondiments.length === 0) return globalRecipes;
+    let result = [...globalRecipes];
+
+    // 1. 태그 필터링 (DB에 태그가 없으므로 본문 내용으로 대체 검색)
+    if (selectedTag !== "전체") {
+      result = result.filter(p => p.content && p.content.includes(selectedTag));
+    }
+
+    // 2. 검색어 필터링
+    if (searchQuery) {
+      result = result.filter(p => (p.content && p.content.includes(searchQuery)) || (p.authorName && p.authorName.includes(searchQuery)));
+    }
+
+    // 3. 탭 필터 (내 맞춤일 경우, 유저가 주로 쓰는 기본 식재료 키워드가 포함된 게시물만 노출 - 임시 하드코딩 필터)
+    if (activeTab === 'custom') {
+      // 실제로는 유저 선호도 기반이지만, 기획 요청대로 하드코딩 필터 적용
+      result = result.filter(p => p.content && (p.content.includes('감자') || p.content.includes('돼지고기') || p.content.includes('김치')));
+    }
     
-    return [...globalRecipes].sort((a, b) => {
-      // 이모지 떼고 한글 단어만 추출 (예: "소금 🧂" -> "소금")
-      const countA = myCondiments.filter(c => a.content.includes(c.split(' ')[0])).length;
-      const countB = myCondiments.filter(c => b.content.includes(c.split(' ')[0])).length;
-      return countB - countA; // 많이 포함된 순으로 내림차순 정렬
-    });
-  }, [globalRecipes, isFilterActive, myCondiments]);
+    // 4. 내 양념장 맞춤 정렬 (기존 로직 유지)
+    if (isFilterActive && myCondiments.length > 0) {
+      result.sort((a, b) => {
+        const countA = myCondiments.filter(c => a.content.includes(c.split(' ')[0])).length;
+        const countB = myCondiments.filter(c => b.content.includes(c.split(' ')[0])).length;
+        return countB - countA;
+      });
+    }
+    return result;
+  }, [globalRecipes, isFilterActive, myCondiments, searchQuery, selectedTag, activeTab]);
+
+  // 💬 댓글 모달 열기
+  const handleOpenComments = (item) => {
+    setTargetPost(item);
+    setCommentModalVisible(true);
+  };
+
+  // 💬 댓글 등록 (로컬 상태 업데이트)
+  const handleAddComment = () => {
+    if (!commentInput.trim() || !targetPost) return;
+    const newComment = commentInput.trim();
+    
+    setGlobalRecipes(prev => prev.map(recipe => {
+      if (recipe.id === targetPost.id) {
+        const updatedComments = recipe.comments ? [...recipe.comments, newComment] : [newComment];
+        setTargetPost({ ...recipe, comments: updatedComments }); // 모달 내부 업데이트
+        return { ...recipe, comments: updatedComments };
+      }
+      return recipe;
+    }));
+    setCommentInput("");
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.headerTitle}>요리 광장 🌍</Text>
-          <Text style={styles.headerSub}>전 세계 셰프들의 AI 레시피 피드</Text>
+          <Text style={styles.headerTitle}>요리 광장</Text>
+          <Text style={styles.headerSub}>셰프들의 AI 레시피 피드</Text>
         </View>
         <View style={styles.limitBadge}>
           <Text style={styles.limitBadgeText}>오늘 열람: {isProUser ? '무제한' : `${plazaViewsLeft}회 남음`}</Text>
@@ -205,7 +272,6 @@ export default function PlazaScreen() {
         </View>
       ) : globalRecipes.length === 0 ? (
         <View style={styles.centerBox}>
-          <Text style={styles.emptyEmoji}>🌬️</Text>
           <Text style={styles.emptyText}>아직 공유된 레시피가 없습니다.</Text>
           <Text style={styles.emptySubText}>첫 번째로 레시피를 공유해 보세요!</Text>
         </View>
@@ -217,10 +283,42 @@ export default function PlazaScreen() {
           showsVerticalScrollIndicator={false}
           ListHeaderComponent={
             <>
-              {/* 👑 이달의 랭킹 셰프 (명예의 전당) */}
+              {/* 🔍 검색 및 태그 필터 UI (New) */}
+              <View style={{ padding: 15, backgroundColor: '#FFFDF9' }}>
+                <TextInput 
+                  style={{ backgroundColor: '#F9F5F3', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#E8D5D0', marginBottom: 15, color: '#3A2E2B' }} 
+                  placeholder="레시피 제목이나 셰프 검색" 
+                  placeholderTextColor="#A89F9C" 
+                  value={searchQuery} 
+                  onChangeText={setSearchQuery} 
+                />
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
+                  {filterTags.map(tag => (
+                    <TouchableOpacity 
+                      key={tag} 
+                      style={{ backgroundColor: selectedTag === tag ? '#FF8C00' : '#F5EBE7', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20 }}
+                      onPress={() => setSelectedTag(tag)}
+                    >
+                      <Text style={{ color: selectedTag === tag ? '#000' : '#8C7A76', fontWeight: 'bold' }}>{tag === '전체' ? '전체' : `#${tag}`}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* 탐색 / 내 맞춤 탭 버튼 */}
+              <View style={{ flexDirection: 'row', paddingHorizontal: 15, paddingBottom: 10, backgroundColor: '#FFFDF9' }}>
+                <TouchableOpacity style={{ flex: 1, paddingVertical: 10, borderBottomWidth: 3, borderBottomColor: activeTab === 'explore' ? '#FF8C00' : 'transparent', alignItems: 'center' }} onPress={() => setActiveTab('explore')}>
+                  <Text style={{ fontWeight: 'bold', color: activeTab === 'explore' ? '#3A2E2B' : '#A89F9C', fontSize: 16 }}>탐색</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={{ flex: 1, paddingVertical: 10, borderBottomWidth: 3, borderBottomColor: activeTab === 'custom' ? '#FF8C00' : 'transparent', alignItems: 'center' }} onPress={() => setActiveTab('custom')}>
+                  <Text style={{ fontWeight: 'bold', color: activeTab === 'custom' ? '#3A2E2B' : '#A89F9C', fontSize: 16 }}>내 맞춤</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* 이달의 랭킹 셰프 (명예의 전당) */}
               {topRecipes.length > 0 && (
                 <View style={styles.rankingSection}>
-                  <Text style={styles.rankingTitle}>🏆 이달의 명예의 전당 (Top 3)</Text>
+                  <Text style={styles.rankingTitle}>이달의 명예의 전당 (Top 3)</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rankingScroll}>
                     {topRecipes.map((item, index) => (
                       <TouchableOpacity 
@@ -230,12 +328,12 @@ export default function PlazaScreen() {
                         onPress={() => handleRecipeClick(item)}
                       >
                         <View style={styles.rankingBadge}>
-                          <Text style={styles.rankingBadgeText}>{index === 0 ? '🥇 1위' : index === 1 ? '🥈 2위' : '🥉 3위'}</Text>
+                          <Text style={styles.rankingBadgeText}>{index + 1}위</Text>
                         </View>
                         <Text style={styles.rankingAuthor}>{item.authorName} 셰프</Text>
                         <Text style={styles.rankingRecipeTitle} numberOfLines={1}>{extractTitle(item.content)}</Text>
                         <View style={styles.rankingLikeBox}>
-                          <Text style={styles.rankingLikeIcon}>❤️ {item.likes || 0}</Text>
+                          <Text style={styles.rankingLikeIcon}>좋아요 {item.likes || 0}</Text>
                         </View>
                       </TouchableOpacity>
                     ))}
@@ -287,9 +385,25 @@ export default function PlazaScreen() {
                 
                 <View style={styles.cardFooter}>
                   <TouchableOpacity style={styles.likeBtn} onPress={() => handleLike(item.id)}>
-                    <Text style={styles.likeIcon}>❤️</Text>
+                    <Text style={styles.likeIcon}>좋아요</Text>
                     <Text style={styles.likeCount}>{item.likes || 0}</Text>
                   </TouchableOpacity>
+                  <TouchableOpacity style={styles.commentBtn} onPress={() => handleOpenComments(item)}>
+                    <Text style={styles.commentIcon}>댓글</Text>
+                    <Text style={styles.commentCount}>{item.comments ? item.comments.length : 0}</Text>
+                  </TouchableOpacity>
+                  
+                  {/* 🍴 릴레이 챌린지 (Fork) 버튼 */}
+                  <TouchableOpacity 
+                    style={{ paddingVertical: 5, flexDirection: 'row', alignItems: 'center', marginLeft: 15 }} 
+                    onPress={() => Alert.alert("릴레이 레시피", `'${item.title || extractTitle(item.content)}' 레시피에 유저님의 비법을 더하시겠습니까?`, [
+                      { text: "취소", style: "cancel" },
+                      { text: "내 비법 더하기", onPress: () => router.push({ pathname: '/create-recipe', params: { forkFrom: item.title || extractTitle(item.content), baseIngredients: item.tags?.join(',') || '' } }) }
+                    ])}
+                  >
+                    <Text style={{ fontWeight: 'bold', color: '#4CAF50' }}>릴레이 참여</Text>
+                  </TouchableOpacity>
+
                   <TouchableOpacity onPress={() => handleRecipeClick(item)}>
                     <Text style={styles.readMoreText}>레시피 보기 →</Text>
                   </TouchableOpacity>
@@ -312,7 +426,7 @@ export default function PlazaScreen() {
             </View>
             
             <TouchableOpacity style={styles.ttsStartBtn} onPress={startCookingMode}>
-              <Text style={styles.ttsStartBtnText}>🔊 화면 안 보고 귀로 듣기 (조리 모드)</Text>
+              <Text style={styles.ttsStartBtnText}>조리 모드로 듣기</Text>
             </TouchableOpacity>
             
             <ScrollView showsVerticalScrollIndicator={false} style={styles.markdownScroll}>
@@ -321,11 +435,11 @@ export default function PlazaScreen() {
             </ScrollView>
             
             <TouchableOpacity style={styles.scrapBtn} onPress={handleScrap}>
-              <Text style={styles.scrapBtnText}>📥 내 주방으로 스크랩하기</Text>
+              <Text style={styles.scrapBtnText}>내 주방으로 스크랩하기</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.shoppingBtn} onPress={() => setShoppingModalVisible(true)}>
-              <Text style={styles.shoppingBtnText}>🛒 부족한 재료 온라인 검색</Text>
+              <Text style={styles.shoppingBtnText}>부족한 재료 온라인 검색</Text>
             </TouchableOpacity>
             <View style={{height: 40}}/>
           </View>
@@ -333,10 +447,10 @@ export default function PlazaScreen() {
       </Modal>
 
       {/* PRO 결제 유도 모달 */}
-      <Modal visible={proModalVisible} transparent={true} animationType="fade">
+      <Modal visible={proModalVisible} transparent animationType="fade">
         <View style={styles.proModalOverlay}>
           <View style={styles.proModalContent}>
-            <Text style={styles.proTitle}>Cookdex PRO 👑</Text>
+            <Text style={styles.proTitle}>Cookdex PRO</Text>
             <Text style={styles.proSubTitle}>오늘의 광장 열람 횟수를 모두 사용하셨습니다!</Text>
             <View style={styles.proBenefitBox}>
               <Text style={styles.proBenefitText}>✅ 전 세계 레시피 무제한 열람</Text>
@@ -393,6 +507,31 @@ export default function PlazaScreen() {
         </View>
       </Modal>
 
+      {/* 💬 댓글 모달 (Bottom Sheet) */}
+      <Modal visible={commentModalVisible} transparent={true} animationType="slide" onRequestClose={() => setCommentModalVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.commentModalOverlay}>
+          <View style={styles.commentModalContent}>
+            <View style={styles.commentHeader}>
+              <Text style={styles.commentTitle}>💬 댓글 ({targetPost?.comments?.length || 0})</Text>
+              <TouchableOpacity onPress={() => setCommentModalVisible(false)}>
+                <Text style={styles.closeBtnText}>닫기 ✕</Text>
+              </TouchableOpacity>
+            </View>
+            <FlatList
+              data={targetPost?.comments || []}
+              keyExtractor={(item, index) => index.toString()}
+              renderItem={({ item }) => <View style={styles.commentRow}><Text style={styles.commentText}>👤 {item}</Text></View>}
+              ListEmptyComponent={<Text style={styles.emptyCommentText}>첫 번째 댓글을 남겨보세요! 👋</Text>}
+              style={{ marginBottom: 10 }}
+            />
+            <View style={styles.commentInputRow}>
+              <TextInput style={styles.commentInput} placeholder="따뜻한 댓글을 남겨주세요..." placeholderTextColor="#A89F9C" value={commentInput} onChangeText={setCommentInput} />
+              <TouchableOpacity style={styles.commentSubmitBtn} onPress={handleAddComment}><Text style={styles.commentSubmitText}>등록</Text></TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -432,6 +571,9 @@ const styles = StyleSheet.create({
   likeBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A3F3A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15 },
   likeIcon: { fontSize: 14, marginRight: 6 },
   likeCount: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold' },
+  commentBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A3F3A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15, marginLeft: 10 },
+  commentIcon: { fontSize: 14, marginRight: 6 },
+  commentCount: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold' },
   readMoreText: { color: '#FF8C00', fontSize: 13, fontWeight: 'bold' },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
@@ -495,5 +637,18 @@ const styles = StyleSheet.create({
   rankingAuthor: { color: '#FFFDF9', fontSize: 12, fontWeight: 'bold', marginTop: 10, marginBottom: 5 },
   rankingRecipeTitle: { color: '#FF8C00', fontSize: 16, fontWeight: '900', marginBottom: 10 },
   rankingLikeBox: { backgroundColor: '#2A2421', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  rankingLikeIcon: { color: '#E8D5D0', fontSize: 12, fontWeight: 'bold' }
+  rankingLikeIcon: { color: '#E8D5D0', fontSize: 12, fontWeight: 'bold' },
+
+  // 💬 댓글 스타일
+  commentModalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
+  commentModalContent: { height: '60%', backgroundColor: '#FFFDF9', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
+  commentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#E8D5D0' },
+  commentTitle: { fontSize: 18, fontWeight: '900', color: '#3A2E2B' },
+  commentRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F5EBE7' },
+  commentText: { fontSize: 14, color: '#3A2E2B', lineHeight: 20 },
+  emptyCommentText: { textAlign: 'center', color: '#A89F9C', marginTop: 30, fontSize: 14 },
+  commentInputRow: { flexDirection: 'row', gap: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#E8D5D0' },
+  commentInput: { flex: 1, backgroundColor: '#F9F5F3', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#E8D5D0', color: '#3A2E2B' },
+  commentSubmitBtn: { backgroundColor: '#FF8C00', justifyContent: 'center', paddingHorizontal: 20, borderRadius: 12 },
+  commentSubmitText: { fontWeight: '900', color: '#000' }
 });

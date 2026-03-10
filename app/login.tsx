@@ -53,8 +53,8 @@ export default function LoginScreen() {
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.logoText}>Cook-Dex 👨‍🍳</Text>
-          <Text style={styles.subText}>{isLoginMode ? "나만의 AI 셰프를 만나보세요" : "위대한 요리의 여정을 시작하세요"}</Text>
+          <Text style={styles.logoText}>Cook-Dex</Text>
+          <Text style={styles.subText}>{isLoginMode ? "나만의 AI 셰프를 만나보세요" : "요리의 여정을 시작하세요"}</Text>
         </View>
 
         <View style={styles.form}>
@@ -63,7 +63,7 @@ export default function LoginScreen() {
           {!isLoginMode && (<TextInput style={styles.input} placeholder={randomPlaceholder} placeholderTextColor="#A89F9C" value={nickname} onChangeText={setNickname} />)}
 
           {/* 🚨 완벽한 모던 중앙 정렬 체크박스 적용 (유니코드 U+2714 사용) */}
-          {isLoginMode && (
+      {isLoginMode && (
             <TouchableOpacity style={styles.checkboxContainer} onPress={() => setIsAutoLogin(!isAutoLogin)} activeOpacity={0.8}>
               <View style={[styles.checkbox, isAutoLogin && styles.checkboxChecked]}>
                 {isAutoLogin && <Text style={styles.checkmark}>✔</Text>}
@@ -73,11 +73,11 @@ export default function LoginScreen() {
           )}
 
           <TouchableOpacity style={styles.submitBtn} onPress={handleAuth} disabled={isLoading}>
-            {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitBtnText}>{isLoginMode ? "로그인 ✨" : "셰프 등록하기 🚀"}</Text>}
+            {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitBtnText}>{isLoginMode ? "로그인" : "셰프 등록하기"}</Text>}
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.toggleBtn} onPress={() => setIsLoginMode(!isLoginMode)}>
-            <Text style={styles.toggleBtnText}>{isLoginMode ? "아직 셰프 등록을 안 하셨나요? 회원가입" : "이미 주방이 있으신가요? 로그인"}</Text>
+            <Text style={styles.toggleBtnText}>{isLoginMode ? "아직 회원이 아니신가요? 회원가입" : "이미 계정이 있으신가요? 로그인"}</Text>
           </TouchableOpacity>
         </View>
       </View>

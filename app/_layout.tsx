@@ -4,6 +4,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { Colors } from '../constants/design-tokens';
 import { auth } from '../firebaseConfig';
 
 export default function RootLayout() {
@@ -41,7 +42,7 @@ export default function RootLayout() {
       router.replace('/login');
     } 
     // 🚨 치명적 에러 해결: 스캐너(scanner) 화면일 때는 홈으로 튕겨내지 않도록 예외 처리 추가!!
-    else if (user && segments[0] !== '(tabs)' && segments[0] !== 'scanner' && segments[0] !== 'create-recipe' && segments[0] !== 'tutorial') {
+    else if (user && segments[0] !== '(tabs)' && segments[0] !== 'scanner' && segments[0] !== 'create-recipe' && segments[0] !== 'tutorial' && segments[0] !== 'benefits') {
       router.replace('/(tabs)');
     }
   }, [user, isInitializing, segments]);
@@ -68,7 +69,7 @@ export default function RootLayout() {
   if (isInitializing || !isTutorialReady) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#FF8C00" />
+        <ActivityIndicator size="large" color={Colors.primary} />
       </View>
     );
   }
@@ -79,10 +80,16 @@ export default function RootLayout() {
       <Stack.Screen name="(tabs)" options={{ gestureEnabled: false }} />
       <Stack.Screen name="scanner" />
       <Stack.Screen name="tutorial" options={{ headerShown: false, gestureEnabled: false }} />
+      <Stack.Screen name="benefits" options={{ headerShown: false, presentation: 'modal' }} />
     </Stack>
   );
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFFDF9' }
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.bgMain,
+  },
 });

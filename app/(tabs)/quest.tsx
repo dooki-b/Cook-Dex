@@ -1,8 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { collection, doc, getDocs, increment, updateDoc } from 'firebase/firestore';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Animated, Dimensions, Modal, PanResponder, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { db } from '../../firebaseConfig';
 
 const INITIAL_MISSIONS = [
   { id: 'm1', text: '오늘의 주방 입장 (출석)', exp: 10, isCompleted: true, isClaimed: false },
@@ -11,10 +13,10 @@ const INITIAL_MISSIONS = [
 ];
 
 const calculateLevel = (exp) => {
-  if (exp < 50) return { level: 1, title: "🍳 요리 쪼렙", nextExp: 50 };
-  if (exp < 150) return { level: 2, title: "🔪 견습 요리사", nextExp: 150 };
-  if (exp < 500) return { level: 3, title: "👨‍🍳 수석 셰프", nextExp: 500 };
-  return { level: 'MAX', title: "👑 마스터 셰프", nextExp: exp };
+  if (exp < 50) return { level: 1, title: "요리 초급", nextExp: 50 };
+  if (exp < 150) return { level: 2, title: "견습 요리사", nextExp: 150 };
+  if (exp < 500) return { level: 3, title: "수석 셰프", nextExp: 500 };
+  return { level: 'MAX', title: "마스터 셰프", nextExp: exp };
 };
 
 export default function QuestScreen() {
@@ -24,13 +26,75 @@ export default function QuestScreen() {
   // 🎮 게이미피케이션 상태
   const [userExp, setUserExp] = useState(0);
   const [missions, setMissions] = useState(INITIAL_MISSIONS);
-  const [equippedTitle, setEquippedTitle] = useState("🍳 요리 쪼렙");
-  const [unlockedTitles, setUnlockedTitles] = useState(["🍳 요리 쪼렙"]);
+  const [equippedTitle, setEquippedTitle] = useState("요리 초급");
+  const [unlockedTitles, setUnlockedTitles] = useState(["요리 초급"]);
   
   const [titleModalVisible, setTitleModalVisible] = useState(false);
   const [isExpBuffActive, setIsExpBuffActive] = useState(false);
   const [mockAdPlaying, setMockAdPlaying] = useState(false);
   const [adCountdown, setAdCountdown] = useState(3);
+
+  // 🗳️ 투표 시스템 상태 (New)
+  const [votingData, setVotingData] = useState([]);
+
+  useEffect(() => {
+    const fetchValidationData = async () => {
+      try {
+        // Firestore의 'validationQueue' 컬렉션에서 대기 중인 데이터 호출
+        const querySnapshot = await getDocs(collection(db, "validationQueue"));
+        const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setVotingData(data);
+      } catch(e) { console.log("DB 호출 에러 (테스트 모드 유지)", e); }
+    };
+    fetchValidationData();
+  }, []);
+
+  // 🗳️ 스와이프 애니메이션 로직 (New)
+  const SCREEN_WIDTH = Dimensions.get('window').width;
+  const swipePosition = useRef(new Animated.ValueXY()).current;
+  
+  const handleSwipeComplete = async (isCorrect) => {
+    const currentItem = votingData[0];
+    if(currentItem) {
+      try {
+        // Firebase에 투표 결과 업데이트 (맞음: approve +1, 틀림: reject +1)
+        const docRef = doc(db, "validationQueue", currentItem.id);
+        await updateDoc(docRef, { [isCorrect ? 'approveCount' : 'rejectCount']: increment(1) });
+        
+        // 유저 경험치 +10P 지급
+        const currentExp = parseInt(await AsyncStorage.getItem('cookdex_user_exp') || '0');
+        await AsyncStorage.setItem('cookdex_user_exp', (currentExp + 10).toString());
+        Alert.alert("투표 완료!", "+10 EXP 획득 🐣");
+      } catch(e) { console.log("투표 업데이트 에러", e); }
+      
+      // 화면에서 현재 카드 제거 (다음 카드로 갱신)
+      setVotingData(prev => prev.slice(1)); 
+    }
+    swipePosition.setValue({ x: 0, y: 0 }); // 위치 초기화
+  };
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderMove: (evt, gestureState) => {
+        swipePosition.setValue({ x: gestureState.dx, y: gestureState.dy });
+      },
+      onPanResponderRelease: (evt, gestureState) => {
+        if (gestureState.dx > 120) {
+          // 우측 스와이프 (O 맞음)
+          Animated.spring(swipePosition, { toValue: { x: SCREEN_WIDTH + 100, y: gestureState.dy }, useNativeDriver: false }).start(() => handleSwipeComplete(true));
+        } else if (gestureState.dx < -120) {
+          // 좌측 스와이프 (X 아님)
+          Animated.spring(swipePosition, { toValue: { x: -SCREEN_WIDTH - 100, y: gestureState.dy }, useNativeDriver: false }).start(() => handleSwipeComplete(false));
+        } else {
+          // 제자리 복귀
+          Animated.spring(swipePosition, { toValue: { x: 0, y: 0 }, friction: 4, useNativeDriver: false }).start();
+        }
+      }
+    })
+  ).current;
+
+  const rotate = swipePosition.x.interpolate({ inputRange: [-SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2], outputRange: ['-10deg', '0deg', '10deg'], extrapolate: 'clamp' });
 
   useFocusEffect(
     useCallback(() => {
@@ -76,7 +140,7 @@ export default function QuestScreen() {
       const updatedTitles = [...currentUnlocked, newTitle];
       setUnlockedTitles(updatedTitles);
       await AsyncStorage.setItem('cookdex_unlocked_titles', JSON.stringify(updatedTitles));
-      Alert.alert("🎉 새로운 칭호 획득!", `[${newTitle}] 칭호가 해금되었습니다! 장착해보세요.`);
+      Alert.alert("새로운 칭호 획득", `[${newTitle}] 칭호가 해금되었습니다. 장착해보세요.`);
     }
   };
 
@@ -92,7 +156,7 @@ export default function QuestScreen() {
 
     const levelInfo = calculateLevel(newExp);
     checkAndUnlockTitles(levelInfo.title, unlockedTitles);
-    Alert.alert("미션 달성! 🎁", `${earnedExp} EXP를 획득했습니다! ${isExpBuffActive ? '(버프 2배 적용)' : ''}`);
+    Alert.alert("미션 달성", `${earnedExp} EXP를 획득했습니다. ${isExpBuffActive ? '(버프 2배 적용)' : ''}`);
   };
 
   const playBuffAd = () => {
@@ -128,15 +192,15 @@ export default function QuestScreen() {
       {/* 🔙 헤더 (홈에서 퀵메뉴로 들어왔을 때를 위한 뒤로가기) */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.push('/(tabs)')} style={styles.backBtn}>
-          <Text style={styles.backBtnText}>◀ 홈으로</Text>
+          <Text style={styles.backBtnText}>뒤로</Text>
         </TouchableOpacity>
-        <Text style={styles.pageTitle}>도파민 퀘스트 📜</Text>
+        <Text style={styles.pageTitle}>도파민 퀘스트</Text>
         <View style={{width: 60}} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         
-        {/* 🎮 레벨 및 칭호 카드 */}
+        {/* 레벨 및 칭호 카드 */}
         <View style={styles.profileCard}>
           <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start'}}>
             <View>
@@ -144,18 +208,18 @@ export default function QuestScreen() {
               <Text style={styles.userName}>나의 요리 등급</Text>
             </View>
             <TouchableOpacity style={styles.changeTitleBtn} onPress={() => setTitleModalVisible(true)}>
-              <Text style={styles.changeTitleBtnText}>칭호 변경 🏅</Text>
+              <Text style={styles.changeTitleBtnText}>칭호 변경</Text>
             </TouchableOpacity>
           </View>
           
           <View style={styles.levelHeader}>
-            <Text style={styles.levelTitle}>Lv.{currentLevelInfo.level} {isExpBuffActive && <Text style={{color: '#E53935'}}>(🔥EXP 2배 버프 중)</Text>}</Text>
+            <Text style={styles.levelTitle}>Lv.{currentLevelInfo.level} {isExpBuffActive && <Text style={{color: '#E53935'}}>(EXP 2배 버프 중)</Text>}</Text>
             <Text style={styles.expText}>{userExp} / {currentLevelInfo.level === 'MAX' ? 'MAX' : currentLevelInfo.nextExp} EXP</Text>
           </View>
           <View style={styles.progressBarBg}><View style={[styles.progressBarFill, { width: `${expProgress}%` }]} /></View>
         </View>
 
-        {/* 🎰 행운의 룰렛 메가 버튼 (도파민 폭발) */}
+        {/* 행운의 룰렛 메가 버튼 */}
         <TouchableOpacity 
           style={styles.rouletteMegaBtn} 
           activeOpacity={0.8}
@@ -165,7 +229,7 @@ export default function QuestScreen() {
           }}
         >
           <View style={styles.rouletteTextLayout}>
-            <Text style={styles.rouletteMegaTitle}>오늘의 행운 룰렛 돌리기 🎰</Text>
+            <Text style={styles.rouletteMegaTitle}>오늘의 행운 룰렛 돌리기</Text>
             <Text style={styles.rouletteMegaSub}>매일 1회 무료! EXP와 특별 보상을 노려보세요</Text>
           </View>
           <View style={styles.rouletteGoBtn}>
@@ -173,15 +237,15 @@ export default function QuestScreen() {
           </View>
         </TouchableOpacity>
 
-        {/* 📺 광고 버프 발동 버튼 */}
+        {/* 광고 버프 발동 버튼 */}
         {!isExpBuffActive && (
           <TouchableOpacity style={styles.buffAdBtn} onPress={playBuffAd}>
-            <Text style={styles.buffAdTitle}>📺 30초 스폰서 광고 시청하기</Text>
+            <Text style={styles.buffAdTitle}>30초 스폰서 광고 시청하기</Text>
             <Text style={styles.buffAdSub}>오늘 하루 모든 미션/요리 경험치 2배 (x2) 획득!</Text>
           </TouchableOpacity>
         )}
 
-        {/* 📜 일일 미션 시스템 */}
+        {/* 일일 미션 시스템 */}
         <View style={styles.settingSection}>
           <Text style={styles.sectionTitle}>📋 오늘의 셰프 미션</Text>
           <Text style={styles.sectionSub}>매일 자정에 초기화됩니다. 달성하고 보상을 챙기세요!</Text>
@@ -204,13 +268,33 @@ export default function QuestScreen() {
           ))}
         </View>
 
+        {/* 스와이프 데이터 검증 */}
+        <View style={{ marginTop: 30, backgroundColor: '#3A322F', padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#4A3F3A', minHeight: 250, alignItems: 'center' }}>
+          <Text style={{ color: '#FFB347', fontSize: 16, fontWeight: 'bold', marginBottom: 15 }}>스와이프 검증 (우측 O / 좌측 X)</Text>
+          
+          {votingData.length > 0 ? (
+            <Animated.View
+              {...panResponder.panHandlers}
+              style={{ transform: [{ translateX: swipePosition.x }, { translateY: swipePosition.y }, { rotate }], backgroundColor: '#2A2421', padding: 30, borderRadius: 20, width: '100%', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 }}
+            >
+              <Text style={{ color: '#FFFDF9', fontSize: 20, fontWeight: 'bold' }}>이 항목이 '{votingData[0].proposedName}'입니까?</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: 30 }}>
+                <Text style={{ color: '#F44336', fontWeight: '900', fontSize: 18 }}>X 아님</Text>
+                <Text style={{ color: '#4CAF50', fontWeight: '900', fontSize: 18 }}>O 맞음</Text>
+              </View>
+            </Animated.View>
+          ) : (
+            <Text style={{ color: '#8C7A76', textAlign: 'center', paddingVertical: 20 }}>현재 검증 대기 중인 데이터가 없습니다.</Text>
+          )}
+        </View>
+
       </ScrollView>
 
-      {/* 🏅 칭호 변경 모달 */}
+      {/* 칭호 변경 모달 */}
       <Modal visible={titleModalVisible} transparent={true} animationType="slide" onRequestClose={() => setTitleModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>내 칭호 장착함 🏅</Text>
+            <Text style={styles.modalTitle}>내 칭호 장착함</Text>
             <Text style={styles.modalSub}>해금된 칭호를 선택하여 뽐내보세요!</Text>
             <ScrollView style={{width: '100%', maxHeight: 300}}>
               {unlockedTitles.map(title => (
@@ -225,10 +309,10 @@ export default function QuestScreen() {
         </View>
       </Modal>
 
-      {/* 📺 가상 광고 모달 */}
+      {/* 가상 광고 모달 */}
       <Modal visible={mockAdPlaying} transparent={false} animationType="slide">
         <View style={styles.mockAdContainer}>
-          <Text style={styles.mockAdTitle}>📺 스폰서 광고 재생 중...</Text>
+          <Text style={styles.mockAdTitle}>스폰서 광고 재생 중...</Text>
           <Text style={styles.mockAdTimer}>{adCountdown}초 후 버프가 발동됩니다</Text>
           <ActivityIndicator size="large" color="#FF8C00" style={{marginTop: 30}} />
         </View>
