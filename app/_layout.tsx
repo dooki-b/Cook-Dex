@@ -1,10 +1,10 @@
 // 파일 위치: app/_layout.tsx
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Stack, useRouter, useSegments } from 'expo-router';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import { auth } from '../firebaseConfig';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Stack, useRouter, useSegments } from "expo-router";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { auth } from "../firebaseConfig";
 
 export default function RootLayout() {
   const [isInitializing, setIsInitializing] = useState(true);
@@ -16,8 +16,9 @@ export default function RootLayout() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        const autoLoginSetting = await AsyncStorage.getItem('cookdex_auto_login');
-        if (autoLoginSetting === 'false') {
+        const autoLoginSetting =
+          await AsyncStorage.getItem("cookdex_auto_login");
+        if (autoLoginSetting === "false") {
           await signOut(auth);
           setUser(null);
         } else {
@@ -33,27 +34,34 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (isInitializing) return; 
+    if (isInitializing) return;
 
-    const inTabsGroup = segments[0] === '(tabs)';
+    const inTabsGroup = segments[0] === "(tabs)";
 
     if (!user && inTabsGroup) {
-      router.replace('/login');
-    } 
+      router.replace("/login");
+    }
     // 🚨 치명적 에러 해결: 스캐너(scanner) 화면일 때는 홈으로 튕겨내지 않도록 예외 처리 추가!!
-    else if (user && segments[0] !== '(tabs)' && segments[0] !== 'scanner' && segments[0] !== 'create-recipe' && segments[0] !== 'tutorial') {
-      router.replace('/(tabs)');
+    else if (
+      user &&
+      segments[0] !== "(tabs)" &&
+      segments[0] !== "scanner" &&
+      segments[0] !== "create-recipe" &&
+      segments[0] !== "tutorial" &&
+      segments[0] !== "search"
+    ) {
+      router.replace("/(tabs)");
     }
   }, [user, isInitializing, segments]);
 
   useEffect(() => {
     const checkTutorialAgreed = async () => {
       try {
-        const hasAgreed = await AsyncStorage.getItem('cookdex_has_agreed');
-        
+        const hasAgreed = await AsyncStorage.getItem("cookdex_has_agreed");
+
         // 동의하지 않았고, 현재 튜토리얼 화면이 아니라면 강제 이동
-        if (hasAgreed !== 'true' && segments[0] !== 'tutorial') {
-          router.replace('/tutorial');
+        if (hasAgreed !== "true" && segments[0] !== "tutorial") {
+          router.replace("/tutorial");
         }
       } catch (error) {
         console.error("튜토리얼 상태 확인 오류:", error);
@@ -78,11 +86,21 @@ export default function RootLayout() {
       <Stack.Screen name="login" options={{ gestureEnabled: false }} />
       <Stack.Screen name="(tabs)" options={{ gestureEnabled: false }} />
       <Stack.Screen name="scanner" />
-      <Stack.Screen name="tutorial" options={{ headerShown: false, gestureEnabled: false }} />
+      <Stack.Screen
+        name="tutorial"
+        options={{ headerShown: false, gestureEnabled: false }}
+      />
+      <Stack.Screen name="search" />
+      <Stack.Screen name="create-recipe" />
     </Stack>
   );
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFFDF9' }
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#FFFDF9",
+  },
 });

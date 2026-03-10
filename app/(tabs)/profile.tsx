@@ -1,404 +1,651 @@
-// ---------------- 아래부터 전체 코드 ----------------
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useRouter } from "expo-router";
+import { signOut } from "firebase/auth";
+import { useEffect, useState } from "react";
+import {
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { auth } from "../../firebaseConfig";
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { auth } from '../../firebaseConfig';
+// 🚨 기본 양념장 리스트 추가
+const DEFAULT_CONDIMENTS = [
+  "소금",
+  "설탕",
+  "후추",
+  "간장",
+  "된장",
+  "고추장",
+  "식초",
+  "참기름",
+  "들기름",
+  "식용유",
+  "고춧가루",
+  "다진 마늘",
+  "깨",
+];
 
-const DIET_GOALS = ["다이어트(저칼로리) 🥗", "벌크업(고단백) 🥩", "비건(채식) 🌿", "저탄고지 🥑", "당뇨/혈당관리 📉"];
-const COMMON_ALLERGIES = ["갑각류 🦐", "견과류 🥜", "우유/유제품 🥛", "계란 🥚", "밀가루 🍞", "복숭아 🍑"];
-const BASIC_CONDIMENTS = ["소금 🧂", "설탕 🍬", "간장 🫙", "고추장 🌶️", "된장 🧆", "후추 🖤", "참기름 🍾", "식용유 🛢️", "다진마늘 🧄", "고춧가루 🌶️"];
+const DEFAULT_DIETS = [
+  "다이어트",
+  "고단백",
+  "저탄고지",
+  "비건",
+  "저염식",
+  "키토제닉",
+  "글루텐프리",
+  "당뇨식",
+];
 
-const calculateLevel = (exp) => {
-  if (exp < 50) return { level: 1, title: "🍳 요리 쪼렙", nextExp: 50 };
-  if (exp < 150) return { level: 2, title: "🔪 견습 요리사", nextExp: 150 };
-  if (exp < 500) return { level: 3, title: "👨‍🍳 수석 셰프", nextExp: 500 };
-  return { level: 'MAX', title: "👑 마스터 셰프", nextExp: exp };
+const DEFAULT_ALLERGIES = [
+  "땅콩",
+  "우유",
+  "계란",
+  "밀가루",
+  "갑각류",
+  "생선",
+  "복숭아",
+  "대두",
+  "메밀",
+];
+
+const TAB_CONFIG = {
+  pantry: {
+    title: "🧂 양념장",
+    placeholder:
+      "집에 항상 구비해두는 기본 양념이나 재료를 등록하세요. (예: 간장, 소금, 참기름)",
+  },
+  diet: {
+    title: "🥗 식단",
+    placeholder:
+      "추구하는 식단 스타일을 등록하세요. (예: 저탄고지, 비건, 고단백)",
+  },
+  allergy: {
+    title: "🤧 알레르기",
+    placeholder:
+      "절대 먹으면 안 되는 재료를 등록하세요. (예: 땅콩, 오이, 갑각류)",
+  },
 };
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const [isInitializing, setIsInitializing] = useState(true);
-  const [user, setUser] = useState(null);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [isLoginLoading, setIsLoginLoading] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const [userNickname, setUserNickname] = useState("");
 
-  // 프로필 세팅 상태
-  const [userExp, setUserExp] = useState(0);
-  const [selectedDiet, setSelectedDiet] = useState([]);
-  const [customDiet, setCustomDiet] = useState("");
-  const [selectedAllergies, setSelectedAllergies] = useState([]);
-  const [customAllergy, setCustomAllergy] = useState("");
-  const [selectedCondiments, setSelectedCondiments] = useState([]);
-  const [customCondiment, setCustomCondiment] = useState("");
+  // 설정 모달 상태
+  const [modalVisible, setModalVisible] = useState(false);
+  const [activeTab, setActiveTab] = useState("pantry"); // 'pantry' | 'diet' | 'allergy'
+  const [inputText, setInputText] = useState("");
 
-  // 🎮 게이미피케이션 상태
-  const [equippedTitle, setEquippedTitle] = useState("🍳 요리 쪼렙");
-  const [unlockedTitles, setUnlockedTitles] = useState(["🍳 요리 쪼렙"]);
-  const [titleModalVisible, setTitleModalVisible] = useState(false);
-  const [isExpBuffActive, setIsExpBuffActive] = useState(false);
-  const [mockAdPlaying, setMockAdPlaying] = useState(false);
-  const [adCountdown, setAdCountdown] = useState(3);
+  const [dietGoal, setDietGoal] = useState([]);
+  const [allergies, setAllergies] = useState([]); // 🚨 배열로 변경
+  const [condiments, setCondiments] = useState([]); // 🚨 양념장 추가
+
+  // 🚨 신규 설정 상태
+  const [pushEnabled, setPushEnabled] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      if (isInitializing) setIsInitializing(false);
-    });
-    return unsubscribe;
-  }, [isInitializing]);
+    const loadProfile = async () => {
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        setUserEmail(currentUser.email);
+        setUserNickname(currentUser.displayName || "셰프");
+      }
 
-  const checkAndUnlockTitles = useCallback(async (newTitle, currentUnlocked) => {
-    if (Array.isArray(currentUnlocked) && !currentUnlocked.includes(newTitle)) {
-      const updatedTitles = [...currentUnlocked, newTitle];
-      setUnlockedTitles(updatedTitles);
-      await AsyncStorage.setItem('cookdex_unlocked_titles', JSON.stringify(updatedTitles));
-      Alert.alert("🎉 새로운 칭호 획득!", `[${newTitle}] 칭호가 해금되었습니다! 장착해보세요.`);
-    }
+      const savedDiet = await AsyncStorage.getItem("cookdex_diet_goal");
+      if (savedDiet) setDietGoal(JSON.parse(savedDiet));
+
+      const savedAllergies = await AsyncStorage.getItem("cookdex_allergies");
+      if (savedAllergies) {
+        try {
+          // 기존 문자열 데이터 호환 처리
+          const parsed = JSON.parse(savedAllergies);
+          if (Array.isArray(parsed)) setAllergies(parsed);
+          else setAllergies([savedAllergies]);
+        } catch {
+          setAllergies(
+            savedAllergies
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s),
+          );
+        }
+      }
+
+      const savedCondiments = await AsyncStorage.getItem("cookdex_condiments");
+      if (savedCondiments) {
+        try {
+          setCondiments(JSON.parse(savedCondiments));
+        } catch {}
+      }
+
+      // 🚨 설정 로드
+      const savedPush = await AsyncStorage.getItem("cookdex_push_enabled");
+      if (savedPush !== null) setPushEnabled(JSON.parse(savedPush));
+
+      const savedTheme = await AsyncStorage.getItem("cookdex_dark_mode");
+      if (savedTheme !== null) setIsDarkMode(JSON.parse(savedTheme));
+    };
+    loadProfile();
   }, []);
 
-  const playBuffAd = () => {
-    setMockAdPlaying(true);
-    let timeLeft = 3;
-    setAdCountdown(timeLeft);
-    const timer = setInterval(async () => {
-      timeLeft -= 1;
-      setAdCountdown(timeLeft);
-      if (timeLeft <= 0) {
-        clearInterval(timer);
-        setMockAdPlaying(false);
-        setIsExpBuffActive(true);
-        await AsyncStorage.setItem('cookdex_exp_buff_date', new Date().toLocaleDateString());
-        Alert.alert("버프 발동! 🔥", "오늘 하루 모든 요리 활동의 경험치가 2배로 증가합니다!");
-      }
-    }, 1000);
+  const handleLogout = async () => {
+    Alert.alert("로그아웃", "정말 로그아웃 하시겠습니까?", [
+      { text: "취소", style: "cancel" },
+      {
+        text: "로그아웃",
+        style: "destructive",
+        onPress: async () => {
+          await signOut(auth);
+          await AsyncStorage.removeItem("cookdex_auto_login");
+          router.replace("/login");
+        },
+      },
+    ]);
   };
 
-  const handleEquipTitle = async (title) => {
-    setEquippedTitle(title);
-    setTitleModalVisible(false);
-    await AsyncStorage.setItem('cookdex_equipped_title', title);
+  const openModal = (tab) => {
+    setActiveTab(tab);
+    setInputText("");
+    setModalVisible(true);
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!user) return;
-      const loadProfileData = async () => {
-        try {
-          // 기본 세팅 로드
-          const expRaw = await AsyncStorage.getItem('cookdex_user_exp');
-          const currentExp = expRaw ? parseInt(expRaw) : 0;
-          setUserExp(currentExp);
+  const addItem = async () => {
+    if (!inputText.trim()) return;
+    const newItem = inputText.trim();
 
-          const savedDiet = await AsyncStorage.getItem('cookdex_diet_goal');
-          if (savedDiet && savedDiet !== "없음") setSelectedDiet(JSON.parse(savedDiet));
+    let updatedList = [];
+    let storageKey = "";
+    let setFunction = null;
+    let currentList = [];
 
-          const savedAllergies = await AsyncStorage.getItem('cookdex_allergies');
-          if (savedAllergies && savedAllergies !== "없음") setSelectedAllergies(savedAllergies.split(', '));
+    if (activeTab === "pantry") {
+      currentList = condiments;
+      storageKey = "cookdex_condiments";
+      setFunction = setCondiments;
+    } else if (activeTab === "diet") {
+      currentList = dietGoal;
+      storageKey = "cookdex_diet_goal";
+      setFunction = setDietGoal;
+    } else {
+      currentList = allergies;
+      storageKey = "cookdex_allergies";
+      setFunction = setAllergies;
+    }
 
-          const savedCondiments = await AsyncStorage.getItem('cookdex_condiments');
-          if (savedCondiments) setSelectedCondiments(JSON.parse(savedCondiments));
+    if (currentList.includes(newItem)) {
+      Alert.alert("알림", "이미 등록된 항목입니다.");
+      return;
+    }
 
-          // 🎮 게임 데이터 로드
-          const savedTitle = await AsyncStorage.getItem('cookdex_equipped_title');
-          if (savedTitle) setEquippedTitle(savedTitle);
-
-          const savedUnlocked = await AsyncStorage.getItem('cookdex_unlocked_titles');
-          if (savedUnlocked) setUnlockedTitles(JSON.parse(savedUnlocked));
-
-          const buffData = await AsyncStorage.getItem('cookdex_exp_buff_date');
-          if (buffData === new Date().toLocaleDateString()) setIsExpBuffActive(true);
-
-          // 레벨업 칭호 체크
-          const levelInfo = calculateLevel(currentExp);
-          checkAndUnlockTitles(levelInfo.title, savedUnlocked ? JSON.parse(savedUnlocked) : ["🍳 요리 쪼렙"]);
-
-        } catch (error) {}
-      };
-      loadProfileData();
-    }, [user])
-  );
-
-  // Auth 함수들
-  const handleLogin = async () => { if (!email || !password) return; setIsLoginLoading(true); try { await signInWithEmailAndPassword(auth, email, password); } catch (e) { Alert.alert("로그인 실패", "확인해주세요."); } finally { setIsLoginLoading(false); } };
-  const handleSignUp = async () => { if (!email || !password) return; setIsLoginLoading(true); try { await createUserWithEmailAndPassword(auth, email, password); } catch (e) { Alert.alert("실패", e.message); } finally { setIsLoginLoading(false); } };
-  const handleLogout = async () => { try { await signOut(auth); setEmail(""); setPassword(""); } catch (e) {} };
-  const handleSocialMock = (provider) => Alert.alert("준비 중", `${provider} 로그인은 앱스토어 심사 시점에 연동됩니다.`);
-
-  // 설정 함수들
-  const toggleDiet = (diet) => { setSelectedDiet(prev => prev.includes(diet) ? prev.filter(d => d !== diet) : [...prev, diet]); };
-  const applyCustomDiet = () => { const diet = customDiet.trim(); if (diet && !selectedDiet.includes(diet)) setSelectedDiet(prev => [...prev, diet]); setCustomDiet(""); };
-  const toggleAllergy = (allergy) => { setSelectedAllergies(prev => prev.includes(allergy) ? prev.filter(a => a !== allergy) : [...prev, allergy]); };
-  const addCustomAllergy = () => { const newA = customAllergy.trim(); if (newA && !selectedAllergies.includes(newA)) setSelectedAllergies(prev => [...prev, newA]); setCustomAllergy(""); };
-  const toggleCondiment = (item) => { setSelectedCondiments(prev => prev.includes(item) ? prev.filter(i => i !== item) : [...prev, item]); };
-  const addCustomCondiment = () => { const newC = customCondiment.trim(); if (newC && !selectedCondiments.includes(newC)) setSelectedCondiments(prev => [...prev, newC]); setCustomCondiment(""); };
-
-  const saveProfileSettings = async () => {
-    try {
-      await AsyncStorage.setItem('cookdex_diet_goal', JSON.stringify(selectedDiet));
-      const allergyStr = selectedAllergies.length > 0 ? selectedAllergies.join(', ') : "없음";
-      await AsyncStorage.setItem('cookdex_allergies', allergyStr);
-      await AsyncStorage.setItem('cookdex_condiments', JSON.stringify(selectedCondiments));
-      Alert.alert("저장 완료! 💾", "맞춤 설정이 AI 셰프에게 완벽하게 전달되었습니다.");
-    } catch (error) {}
+    updatedList = [...currentList, newItem];
+    setFunction(updatedList);
+    await AsyncStorage.setItem(storageKey, JSON.stringify(updatedList));
+    setInputText("");
   };
 
-  if (isInitializing) return <View style={[styles.container, {justifyContent: 'center'}]}><ActivityIndicator size="large" color="#FF8C00" /></View>;
+  const removeItem = async (itemToRemove) => {
+    let updatedList = [];
+    let storageKey = "";
+    let setFunction = null;
+    let currentList = [];
 
-  if (!user) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.authContainer}>
-          <Text style={styles.authTitle}>Cookdex 👨‍🍳</Text>
-          <Text style={styles.authSubTitle}>나만의 AI 셰프 유니버스에 접속하세요</Text>
-          <View style={styles.authInputBox}>
-            <TextInput style={styles.authInput} placeholder="이메일 주소" placeholderTextColor="#A89F9C" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
-            <TextInput style={styles.authInput} placeholder="비밀번호 (6자리 이상)" placeholderTextColor="#A89F9C" secureTextEntry value={password} onChangeText={setPassword} />
-            {isLoginLoading ? <ActivityIndicator size="large" color="#FF8C00" style={{marginVertical: 15}} /> : (
-              <View style={styles.authBtnRow}>
-                <TouchableOpacity style={[styles.authBtn, {backgroundColor: '#5A4E49'}]} onPress={handleSignUp}><Text style={styles.authBtnText}>가입</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.authBtn, {backgroundColor: '#FF8C00'}]} onPress={handleLogin}><Text style={styles.authBtnText}>로그인</Text></TouchableOpacity>
-              </View>
-            )}
-          </View>
-          <View style={styles.dividerBox}><View style={styles.dividerLine} /><Text style={styles.dividerText}>또는 간편 로그인</Text><View style={styles.dividerLine} /></View>
-          <TouchableOpacity style={[styles.socialBtn, {backgroundColor: '#fff'}]} onPress={() => handleSocialMock("Google")}><Text style={[styles.socialBtnText, {color: '#000'}]}>Google로 계속하기</Text></TouchableOpacity>
-          <TouchableOpacity style={[styles.socialBtn, {backgroundColor: '#FEE500'}]} onPress={() => handleSocialMock("Kakao")}><Text style={[styles.socialBtnText, {color: '#000'}]}>카카오로 계속하기</Text></TouchableOpacity>
-        </View>
-      </SafeAreaView>
+    if (activeTab === "pantry") {
+      currentList = condiments;
+      storageKey = "cookdex_condiments";
+      setFunction = setCondiments;
+    } else if (activeTab === "diet") {
+      currentList = dietGoal;
+      storageKey = "cookdex_diet_goal";
+      setFunction = setDietGoal;
+    } else {
+      currentList = allergies;
+      storageKey = "cookdex_allergies";
+      setFunction = setAllergies;
+    }
+
+    updatedList = currentList.filter((item) => item !== itemToRemove);
+    setFunction(updatedList);
+    await AsyncStorage.setItem(storageKey, JSON.stringify(updatedList));
+  };
+
+  const replayTutorial = () => {
+    Alert.alert("튜토리얼", "앱 사용 가이드를 다시 보시겠습니까?", [
+      { text: "취소", style: "cancel" },
+      { text: "다시보기", onPress: () => router.push("/tutorial") },
+    ]);
+  };
+
+  const getCurrentList = () => {
+    if (activeTab === "pantry") return condiments;
+    if (activeTab === "diet") return dietGoal;
+    return allergies;
+  };
+
+  const togglePush = async () => {
+    const newValue = !pushEnabled;
+    setPushEnabled(newValue);
+    await AsyncStorage.setItem(
+      "cookdex_push_enabled",
+      JSON.stringify(newValue),
     );
-  }
+  };
 
-  const currentLevelInfo = calculateLevel(userExp);
-  const expProgress = currentLevelInfo.level === 'MAX' ? 100 : (userExp / currentLevelInfo.nextExp) * 100;
+  const toggleTheme = async () => {
+    const newValue = !isDarkMode;
+    setIsDarkMode(newValue);
+    await AsyncStorage.setItem("cookdex_dark_mode", JSON.stringify(newValue));
+  };
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
-      >
-        <ScrollView 
-          style={{ flex: 1 }}
-          showsVerticalScrollIndicator={false} 
-          contentContainerStyle={styles.scrollContent} 
-          keyboardShouldPersistTaps="handled"
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>내 정보 ⚙️</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.content}>
+        {/* 프로필 카드 */}
+        <View style={styles.profileCard}>
+          <View style={styles.avatar}>
+            <Text style={{ fontSize: 30 }}>👨‍🍳</Text>
+          </View>
+          <View>
+            <Text style={styles.nickname}>{userNickname}</Text>
+            <Text style={styles.email}>{userEmail}</Text>
+          </View>
+        </View>
+
+        <Text style={styles.sectionTitle}>앱 설정</Text>
+
+        {/* 🚨 다크 모드 & 알림 설정 */}
+        <View style={styles.settingGroup}>
+          <View style={styles.settingItem}>
+            <Text style={styles.settingLabel}>🌙 다크 모드</Text>
+            <Switch
+              trackColor={{ false: "#E8D5D0", true: "#FF8C00" }}
+              thumbColor={isDarkMode ? "#fff" : "#f4f3f4"}
+              onValueChange={toggleTheme}
+              value={isDarkMode}
+            />
+          </View>
+
+          <View style={styles.settingItem}>
+            <View>
+              <Text style={styles.settingLabel}>🔔 기념일 Push 알림</Text>
+              <Text style={styles.settingSubLabel}>
+                특별한 날 레시피 추천 받기
+              </Text>
+            </View>
+            <Switch
+              trackColor={{ false: "#E8D5D0", true: "#FF8C00" }}
+              thumbColor={pushEnabled ? "#fff" : "#f4f3f4"}
+              onValueChange={togglePush}
+              value={pushEnabled}
+            />
+          </View>
+        </View>
+
+        <Text style={styles.sectionTitle}>맞춤 요리 설정</Text>
+
+        {/* 🚨 통합 설정 버튼 */}
+        <TouchableOpacity
+          style={styles.settingItem}
+          onPress={() => openModal("pantry")}
         >
-          
-          <View style={styles.pageHeaderRow}>
-            <Text style={styles.pageTitle}>내 정보 및 퀘스트 📜</Text>
-            <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}><Text style={styles.logoutBtnText}>로그아웃</Text></TouchableOpacity>
+          <View>
+            <Text style={styles.settingLabel}>🍳 맞춤 요리 설정</Text>
+            <Text style={styles.settingValue} numberOfLines={1}>
+              나의 양념장, 식단, 알레르기 정보를 관리합니다.
+            </Text>
           </View>
+          <Text style={styles.arrow}>›</Text>
+        </TouchableOpacity>
 
-          {/* 🎮 레벨 및 칭호 카드 */}
-          <View style={styles.profileCard}>
-            <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start'}}>
-              <View>
-                <Text style={styles.equippedTitleBadge}>{equippedTitle}</Text>
-                <Text style={styles.userName}>{user.email?.split('@')[0] || "익명"} 셰프님</Text>
-              </View>
-              <TouchableOpacity style={styles.changeTitleBtn} onPress={() => setTitleModalVisible(true)}>
-                <Text style={styles.changeTitleBtnText}>칭호 변경 🏅</Text>
-              </TouchableOpacity>
-            </View>
-            
-            <View style={styles.levelHeader}>
-              <Text style={styles.levelTitle}>Lv.{currentLevelInfo.level} {isExpBuffActive && <Text style={{color: '#E53935'}}>(🔥EXP 2배 버프 중)</Text>}</Text>
-              <Text style={styles.expText}>{userExp} / {currentLevelInfo.level === 'MAX' ? 'MAX' : currentLevelInfo.nextExp} EXP</Text>
-            </View>
-            <View style={styles.progressBarBg}><View style={[styles.progressBarFill, { width: `${expProgress}%` }]} /></View>
-          </View>
+        <TouchableOpacity style={styles.settingItem} onPress={replayTutorial}>
+          <Text style={styles.settingLabel}>📖 튜토리얼 다시보기</Text>
+          <Text style={styles.arrow}>›</Text>
+        </TouchableOpacity>
 
-          {/* 📺 광고 버프 발동 버튼 */}
-          {!isExpBuffActive && (
-            <TouchableOpacity style={styles.buffAdBtn} onPress={playBuffAd}>
-              <Text style={styles.buffAdTitle}>📺 30초 스폰서 광고 시청하기</Text>
-              <Text style={styles.buffAdSub}>오늘 하루 모든 미션/요리 경험치 2배 (x2) 획득!</Text>
-            </TouchableOpacity>
-          )}
+        <TouchableOpacity
+          style={[styles.settingItem, { borderBottomWidth: 0 }]}
+          onPress={handleLogout}
+        >
+          <Text style={[styles.settingLabel, { color: "#FF6B6B" }]}>
+            🚪 로그아웃
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
 
-          {/* 🧂 우리 집 기본 양념장 (Pantry) */}
-          <View style={styles.settingSection}>
-            <Text style={styles.sectionTitle}>🧂 우리 집 기본 양념장 (Pantry)</Text>
-            <Text style={styles.sectionSub}>AI가 레시피 추천 시 '집에 있는 재료'로 간주합니다.</Text>
-            <View style={styles.chipContainer}>
-              {BASIC_CONDIMENTS.map(item => (<TouchableOpacity key={item} style={[styles.chip, selectedCondiments.includes(item) && styles.chipActive]} onPress={() => toggleCondiment(item)}><Text style={[styles.chipText, selectedCondiments.includes(item) && styles.chipTextActive]}>{item}</Text></TouchableOpacity>))}
-            </View>
-            <View style={styles.inputRow}>
-              <TextInput style={styles.customInput} placeholder="예: 굴소스, 마요네즈" placeholderTextColor="#A89F9C" value={customCondiment} onChangeText={setCustomCondiment} onSubmitEditing={addCustomCondiment} />
-              <TouchableOpacity style={styles.addBtn} onPress={addCustomCondiment}><Text style={styles.addBtnText}>추가</Text></TouchableOpacity>
-            </View>
-            {selectedCondiments.length > 0 && (
-              <View style={styles.selectedTagsContainer}>
-                {selectedCondiments.map(a => (<TouchableOpacity key={a} style={styles.tagBadgeActive} onPress={() => toggleCondiment(a)}><Text style={styles.tagTextActive}>{a} ✕</Text></TouchableOpacity>))}
-              </View>
-            )}
-          </View>
-
-          {/* 🎯 다이어트 배열 수정 */}
-          <View style={styles.settingSection}>
-            <Text style={styles.sectionTitle}>🎯 내 식단 목표</Text>
-            <View style={styles.chipContainer}>
-              {DIET_GOALS.map(diet => (<TouchableOpacity key={diet} style={[styles.chip, selectedDiet.includes(diet) && styles.chipActive]} onPress={() => toggleDiet(diet)}><Text style={[styles.chipText, selectedDiet.includes(diet) && styles.chipTextActive]}>{diet}</Text></TouchableOpacity>))}
-            </View>
-            <View style={styles.inputRow}>
-              <TextInput style={styles.customInput} placeholder="예: 저염식, 간헐적단식" placeholderTextColor="#A89F9C" value={customDiet} onChangeText={setCustomDiet} onSubmitEditing={applyCustomDiet} />
-              <TouchableOpacity style={styles.addBtn} onPress={applyCustomDiet}><Text style={styles.addBtnText}>적용</Text></TouchableOpacity>
-            </View>
-            {selectedDiet.length > 0 && (
-              <View style={styles.selectedTagsContainer}>
-                {selectedDiet.map(d => (<TouchableOpacity key={d} style={styles.tagBadgeActive} onPress={() => toggleDiet(d)}><Text style={styles.tagTextActive}>{d} ✕</Text></TouchableOpacity>))}
-              </View>
-            )}
-          </View>
-
-          {/* 🚫 알레르기 */}
-          <View style={styles.settingSection}>
-            <Text style={styles.sectionTitle}>🚫 알레르기 및 기피 식재료</Text>
-            <View style={styles.chipContainer}>
-              {COMMON_ALLERGIES.map(allergy => (<TouchableOpacity key={allergy} style={[styles.chip, selectedAllergies.includes(allergy) && styles.chipDangerActive]} onPress={() => toggleAllergy(allergy)}><Text style={[styles.chipText, selectedAllergies.includes(allergy) && styles.chipTextActive]}>{allergy}</Text></TouchableOpacity>))}
-            </View>
-            <View style={styles.inputRow}>
-              <TextInput style={styles.customInput} placeholder="예: 오이, 고수" placeholderTextColor="#A89F9C" value={customAllergy} onChangeText={setCustomAllergy} onSubmitEditing={addCustomAllergy} />
-              <TouchableOpacity style={styles.addBtn} onPress={addCustomAllergy}><Text style={styles.addBtnText}>추가</Text></TouchableOpacity>
-            </View>
-            {selectedAllergies.length > 0 && (
-              <View style={styles.selectedTagsContainer}>
-                {selectedAllergies.map(a => (<TouchableOpacity key={a} style={styles.tagBadgeDanger} onPress={() => toggleAllergy(a)}><Text style={styles.tagTextActive}>{a} ✕</Text></TouchableOpacity>))}
-              </View>
-            )}
-          </View>
-
-          <TouchableOpacity style={styles.saveButton} onPress={saveProfileSettings}><Text style={styles.saveButtonText}>설정 저장하기 ✨</Text></TouchableOpacity>
-
-          {/* ℹ️ 앱 튜토리얼 및 법적 고지 다시 보기 */}
-          <TouchableOpacity 
-            style={styles.tutorialReplayBtn} 
-            activeOpacity={0.8}
-            onPress={() => router.push('/tutorial')}
-          >
-            <Text style={styles.tutorialReplayIcon}>ℹ️</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.tutorialReplayTitle}>앱 튜토리얼 및 법적 고지</Text>
-              <Text style={styles.tutorialReplaySub}>기초 기능 안내 및 안전/위생 면책 동의서 다시 보기</Text>
-            </View>
-            <Text style={{ color: '#A89F9C', fontSize: 16 }}>▶</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </KeyboardAvoidingView>
-
-      {/* 🏅 칭호 변경 모달 */}
-      <Modal visible={titleModalVisible} transparent={true} animationType="slide" onRequestClose={() => setTitleModalVisible(false)}>
+      {/* 🚨 통합 설정 모달 */}
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setModalVisible(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>내 칭호 장착함 🏅</Text>
-            <Text style={styles.modalSub}>해금된 칭호를 선택하여 뽐내보세요!</Text>
-            <ScrollView style={{width: '100%', maxHeight: 300}}>
-              {unlockedTitles.map(title => (
-                <TouchableOpacity key={title} style={[styles.titleOption, equippedTitle === title && {borderColor: '#FF8C00', backgroundColor: '#4A3F3A'}]} onPress={() => handleEquipTitle(title)}>
-                  <Text style={[styles.titleOptionText, equippedTitle === title && {color: '#FF8C00', fontWeight: 'bold'}]}>{title} {equippedTitle === title && "✓"}</Text>
+            {/* 탭 헤더 */}
+            <View style={styles.tabHeader}>
+              <TouchableOpacity
+                style={[
+                  styles.tabBtn,
+                  activeTab === "pantry" && styles.tabBtnActive,
+                ]}
+                onPress={() => {
+                  setActiveTab("pantry");
+                  setInputText("");
+                }}
+              >
+                <Text
+                  style={[
+                    styles.tabBtnText,
+                    activeTab === "pantry" && styles.tabBtnTextActive,
+                  ]}
+                >
+                  {TAB_CONFIG.pantry.title}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.tabBtn,
+                  activeTab === "diet" && styles.tabBtnActive,
+                ]}
+                onPress={() => {
+                  setActiveTab("diet");
+                  setInputText("");
+                }}
+              >
+                <Text
+                  style={[
+                    styles.tabBtnText,
+                    activeTab === "diet" && styles.tabBtnTextActive,
+                  ]}
+                >
+                  {TAB_CONFIG.diet.title}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.tabBtn,
+                  activeTab === "allergy" && styles.tabBtnActive,
+                ]}
+                onPress={() => {
+                  setActiveTab("allergy");
+                  setInputText("");
+                }}
+              >
+                <Text
+                  style={[
+                    styles.tabBtnText,
+                    activeTab === "allergy" && styles.tabBtnTextActive,
+                  ]}
+                >
+                  {TAB_CONFIG.allergy.title}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSub}>
+              {TAB_CONFIG[activeTab].placeholder}
+            </Text>
+
+            {/* 태그 리스트 영역 */}
+            <View style={styles.tagListContainer}>
+              {getCurrentList().map((item, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.tagBadge}
+                  onPress={() => removeItem(item)}
+                >
+                  <Text style={styles.tagText}>{item} ✕</Text>
                 </TouchableOpacity>
               ))}
-              <View style={[styles.titleOption, {opacity: 0.5}]}><Text style={styles.titleOptionText}>??? (비밀 조건 달성 시 해금) 🔒</Text></View>
-            </ScrollView>
-            <TouchableOpacity style={styles.closeModalBtn} onPress={() => setTitleModalVisible(false)}><Text style={styles.closeModalBtnText}>닫기</Text></TouchableOpacity>
+              {getCurrentList().length === 0 && (
+                <Text style={styles.emptyText}>등록된 항목이 없습니다.</Text>
+              )}
+            </View>
+
+            {/* 🚨 추천 태그 영역 (양념장, 식단, 알레르기 모두 적용) */}
+            {(activeTab === "pantry" ||
+              activeTab === "diet" ||
+              activeTab === "allergy") && (
+              <View style={styles.suggestionContainer}>
+                <Text style={styles.suggestionTitle}>
+                  {activeTab === "pantry"
+                    ? "기본 양념 빠른 추가"
+                    : activeTab === "diet"
+                      ? "인기 식단 목표"
+                      : "주요 알레르기 유발 식품"}
+                </Text>
+                <View style={styles.tagListContainer}>
+                  {(activeTab === "pantry"
+                    ? DEFAULT_CONDIMENTS
+                    : activeTab === "diet"
+                      ? DEFAULT_DIETS
+                      : DEFAULT_ALLERGIES
+                  )
+                    .filter((c) => !getCurrentList().includes(c))
+                    .map((item, index) => (
+                      <TouchableOpacity
+                        key={index}
+                        style={styles.suggestionTag}
+                        onPress={() => {
+                          setInputText(item);
+                          addItem();
+                        }}
+                      >
+                        <Text style={styles.suggestionTagText}>{item} +</Text>
+                      </TouchableOpacity>
+                    ))}
+                </View>
+              </View>
+            )}
+
+            {/* 입력 영역 */}
+            <View style={styles.inputRow}>
+              <TextInput
+                style={styles.input}
+                value={inputText}
+                onChangeText={setInputText}
+                placeholder="항목 입력"
+                placeholderTextColor="#A89F9C"
+                onSubmitEditing={addItem}
+              />
+              <TouchableOpacity style={styles.addBtn} onPress={addItem}>
+                <Text style={styles.addBtnText}>추가</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.closeBtn}
+              onPress={() => setModalVisible(false)}
+            >
+              <Text style={styles.closeBtnText}>닫기</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
-
-      {/* 📺 가상 광고 모달 */}
-      <Modal visible={mockAdPlaying} transparent={false} animationType="slide">
-        <View style={styles.mockAdContainer}>
-          <Text style={styles.mockAdTitle}>📺 스폰서 광고 재생 중...</Text>
-          <Text style={styles.mockAdTimer}>{adCountdown}초 후 버프가 발동됩니다</Text>
-          <ActivityIndicator size="large" color="#FF8C00" style={{marginTop: 30}} />
-        </View>
-      </Modal>
-
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#2A2421' },
-  scrollContent: { padding: 20, paddingBottom: 150 },
-  pageHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: Platform.OS === 'android' ? 40 : 20, marginBottom: 20 },
-  pageTitle: { fontSize: 24, fontWeight: '900', color: '#FFFDF9', margin: 0 },
-  logoutBtn: { backgroundColor: '#4A3F3A', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 10 },
-  logoutBtnText: { color: '#E8D5D0', fontSize: 12, fontWeight: 'bold' },
-  
-  // Auth
-  authContainer: { flex: 1, justifyContent: 'center', padding: 30 },
-  authTitle: { fontSize: 40, fontWeight: '900', color: '#FF8C00', textAlign: 'center', marginBottom: 10 },
-  authSubTitle: { fontSize: 16, color: '#FFFDF9', textAlign: 'center', marginBottom: 40, fontWeight: 'bold' },
-  authInputBox: { marginBottom: 30 },
-  authInput: { backgroundColor: '#3A322F', color: '#FFFDF9', borderWidth: 1, borderColor: '#4A3F3A', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 16, fontSize: 16, marginBottom: 12 },
-  authBtnRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
-  authBtn: { flex: 1, paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
-  authBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  dividerBox: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: '#4A3F3A' },
-  dividerText: { color: '#8C7A76', paddingHorizontal: 15, fontSize: 13, fontWeight: 'bold' },
-  socialBtn: { paddingVertical: 16, borderRadius: 12, alignItems: 'center', marginBottom: 12 },
-  socialBtnText: { fontSize: 16, fontWeight: 'bold' },
+  container: { flex: 1, backgroundColor: "#FFFDF9" },
+  header: { padding: 20, borderBottomWidth: 1, borderBottomColor: "#E8D5D0" },
+  headerTitle: { fontSize: 22, fontWeight: "900", color: "#3A2E2B" },
+  content: { padding: 20 },
+  profileCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF",
+    padding: 20,
+    borderRadius: 16,
+    marginBottom: 30,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: "#E8D5D0",
+  },
 
-  // Profile
-  profileCard: { backgroundColor: '#3A322F', borderRadius: 20, padding: 20, marginBottom: 30, borderWidth: 1, borderColor: '#4A3F3A' },
-  equippedTitleBadge: { backgroundColor: '#FF8C00', alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, marginBottom: 8, fontSize: 12, fontWeight: 'bold', color: '#000' },
-  userName: { fontSize: 22, fontWeight: 'bold', color: '#FFFDF9', marginBottom: 15 },
-  changeTitleBtn: { backgroundColor: '#4A3F3A', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: '#5A4E49' },
-  changeTitleBtnText: { color: '#FFB347', fontSize: 12, fontWeight: 'bold' },
-  levelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 10 },
-  levelTitle: { fontSize: 16, fontWeight: 'bold', color: '#FF8C00' },
-  expText: { fontSize: 13, fontWeight: 'bold', color: '#A89F9C' },
-  progressBarBg: { width: '100%', height: 12, backgroundColor: '#4A3F3A', borderRadius: 6, overflow: 'hidden' },
-  progressBarFill: { height: '100%', backgroundColor: '#FF8C00', borderRadius: 6 },
+  avatar: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "#F5EBE7",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 15,
+  },
+  nickname: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#3A2E2B",
+    marginBottom: 4,
+  },
+  email: { fontSize: 14, color: "#8C7A76" },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: "bold",
+    color: "#A89F9C",
+    marginBottom: 10,
+    marginTop: 10,
+  },
+  settingItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F5EBE7",
+  },
+  settingLabel: {
+    fontSize: 16,
+    color: "#3A2E2B",
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  settingSubLabel: { fontSize: 12, color: "#8C7A76" },
+  settingValue: { fontSize: 13, color: "#8C7A76", maxWidth: 250 },
+  arrow: { fontSize: 20, color: "#D7CCC8" },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: "#FFF",
+    borderRadius: 20,
+    padding: 20,
+    maxHeight: "80%",
+  },
 
-  buffAdBtn: { backgroundColor: '#3F2860', padding: 20, borderRadius: 20, marginBottom: 25, borderWidth: 1, borderColor: '#9C27B0', alignItems: 'center' },
-  buffAdTitle: { color: '#E1BEE7', fontSize: 16, fontWeight: '900', marginBottom: 5 },
-  buffAdSub: { color: '#CE93D8', fontSize: 12 },
+  // 🚨 탭 스타일
+  tabHeader: {
+    flexDirection: "row",
+    marginBottom: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F5EBE7",
+  },
+  tabBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  tabBtnActive: { borderBottomColor: "#FF8C00" },
+  tabBtnText: { fontSize: 14, color: "#A89F9C", fontWeight: "bold" },
+  tabBtnTextActive: { color: "#FF8C00", fontWeight: "900" },
 
-  settingSection: { backgroundColor: '#3A322F', borderRadius: 20, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: '#4A3F3A' },
-  sectionTitle: { fontSize: 16, fontWeight: '900', color: '#FFFDF9', marginBottom: 5 },
-  sectionSub: { fontSize: 12, color: '#A89F9C', marginBottom: 15 },
-  
-  chipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 },
-  chip: { backgroundColor: '#4A3F3A', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 20, borderWidth: 1, borderColor: '#5A4E49' },
-  chipActive: { backgroundColor: '#4CAF50', borderColor: '#4CAF50' },
-  chipDangerActive: { backgroundColor: '#E53935', borderColor: '#E53935' },
-  chipText: { color: '#E8D5D0', fontSize: 13, fontWeight: 'bold' },
-  chipTextActive: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
+  modalSub: {
+    fontSize: 13,
+    color: "#8C7A76",
+    marginBottom: 15,
+    textAlign: "center",
+  },
 
-  inputRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
-  customInput: { flex: 1, backgroundColor: '#4A3F3A', color: '#FFFDF9', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 12, fontSize: 14, borderWidth: 1, borderColor: '#5A4E49' },
-  addBtn: { backgroundColor: '#5A4E49', paddingHorizontal: 20, justifyContent: 'center', alignItems: 'center', borderRadius: 12 },
-  addBtnText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
-  selectedTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5, padding: 10, backgroundColor: '#4A3F3A', borderRadius: 12 },
-  tagBadgeDanger: { paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#E53935', borderRadius: 15 },
-  tagBadgeActive: { paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#4CAF50', borderRadius: 15 },
-  tagTextActive: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+  tagListContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 20,
+    minHeight: 50,
+  },
+  tagBadge: {
+    backgroundColor: "#F9F5F3",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: "#E8D5D0",
+  },
+  tagText: { color: "#3A2E2B", fontSize: 14, fontWeight: "bold" },
+  emptyText: {
+    color: "#D7CCC8",
+    fontSize: 14,
+    width: "100%",
+    textAlign: "center",
+    marginTop: 10,
+  },
+  suggestionContainer: {
+    marginTop: 10,
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: "#F5EBE7",
+  },
+  suggestionTitle: {
+    fontSize: 13,
+    fontWeight: "bold",
+    color: "#A89F9C",
+    marginBottom: 10,
+  },
+  suggestionTag: {
+    backgroundColor: "#fff",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: "#E8D5D0",
+  },
+  suggestionTagText: { color: "#8C7A76", fontSize: 14 },
 
-  saveButton: { backgroundColor: '#FF8C00', paddingVertical: 18, borderRadius: 16, alignItems: 'center', marginTop: 10, shadowColor: '#FF8C00' },
-  saveButtonText: { color: '#000', fontSize: 16, fontWeight: '900' },
+  inputRow: { flexDirection: "row", gap: 10, marginBottom: 15 },
+  input: {
+    flex: 1,
+    backgroundColor: "#F9F5F3",
+    padding: 15,
+    borderRadius: 12,
+    fontSize: 16,
+    color: "#3A2E2B",
+    borderWidth: 1,
+    borderColor: "#E8D5D0",
+  },
+  addBtn: {
+    backgroundColor: "#FF8C00",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+    borderRadius: 12,
+  },
+  addBtnText: { color: "#fff", fontWeight: "bold" },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  modalContent: { backgroundColor: '#2A2421', borderRadius: 24, padding: 25, borderWidth: 1, borderColor: '#FF8C00', width: '100%', alignItems: 'center' },
-  modalTitle: { fontSize: 22, fontWeight: '900', color: '#FF8C00', marginBottom: 10 },
-  modalSub: { fontSize: 14, color: '#FFFDF9', marginBottom: 20 },
-  titleOption: { width: '100%', padding: 15, borderBottomWidth: 1, borderBottomColor: '#4A3F3A', borderRadius: 10, marginBottom: 5 },
-  titleOptionText: { color: '#FFFDF9', fontSize: 16, textAlign: 'center' },
-  closeModalBtn: { marginTop: 20, backgroundColor: '#4A3F3A', paddingVertical: 12, paddingHorizontal: 30, borderRadius: 15 },
-  closeModalBtnText: { color: '#FFFDF9', fontWeight: 'bold' },
-  mockAdContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
-  mockAdTitle: { color: '#FFFDF9', fontSize: 22, fontWeight: 'bold', marginBottom: 20 },
-  mockAdTimer: { color: '#FF8C00', fontSize: 40, fontWeight: '900' },
-
-  tutorialReplayBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#3A322F', padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#4A3F3A', marginTop: 30, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 3 },
-  tutorialReplayIcon: { fontSize: 24, marginRight: 15 },
-  tutorialReplayTitle: { color: '#FFFDF9', fontSize: 15, fontWeight: 'bold', marginBottom: 4 },
-  tutorialReplaySub: { color: '#A89F9C', fontSize: 12 },
+  closeBtn: {
+    backgroundColor: "#F5EBE7",
+    paddingVertical: 15,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  closeBtnText: { color: "#8C7A76", fontWeight: "bold" },
+  settingGroup: { marginBottom: 20 },
 });

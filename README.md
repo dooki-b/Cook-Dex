@@ -47,5 +47,3 @@ docker-compose up --build
   - A: 터미널 창을 클릭하고 키보드 `s`를 눌러보세요. 혹은 로그에 찍힌 `exp://...` 주소를 복사해 앱에 직접 입력하세요.
 
 ---
-
-Happy Coding! 👨‍🍳
