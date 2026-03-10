@@ -419,9 +419,9 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            {/* 검색창 */}
-            <TouchableOpacity style={[styles.searchBar, styles.glassCard]} activeOpacity={0.9} onPress={() => goCreateRecipe()}>
-              <Text style={styles.searchPlaceholder}>재료나 요리명 검색 · AI 레시피 만들기</Text>
+            {/* 검색창 — 탭 시 Search(레시피 검색) 화면으로 이동 */}
+            <TouchableOpacity style={[styles.searchBar, styles.glassCard]} activeOpacity={0.9} onPress={() => router.push('/search')}>
+              <Text style={styles.searchPlaceholder}>재료나 요리명 검색</Text>
             </TouchableOpacity>
 
             {/* 오늘 냉장고 파먹기 (메인 CTA) — 배경 이미지 + 가독성 오버레이 */}
