@@ -287,9 +287,14 @@
     - `"curation_from_text"` 타입: `invalid_items`, `detected_ingredients`, 3개의 `curation_themes`(예: 불고기덮밥/얼큰김치찌개/상큼샐러드).  
     - `"curation_from_image"` 타입: 이미지에서 뽑힌 예시 재료 리스트 + 3가지 추천 테마.  
     - `"final_recipe_markdown"` 타입: 불고기덮밥 예시 레시피 마크다운 + 쇼핑 리스트.  
-  - 운영 모드에서(`__DEV__ === false`)는 기존처럼 실제 Gemini API를 호출하므로,  
-    - **DEV: 회수 제한·비용 걱정 없이 UI/플로우 테스트**,  
+  - 운영 모드에서(`__DEV__ === false`)는 기존처럼 실제 Gemini API를 호출하므로,
+    - **DEV: 회수 제한·비용 걱정 없이 UI/플로우 테스트**,
     - **PROD: 실제 모델 응답 사용**이 자연스럽게 분리되도록 구현되어 있습니다.
+
+**7-17. 맞춤 요리 카드 인분 선택(카드 뒤집기·opacity 전환·터치 개선) + recipe-detail 릴레이**
+- **create-recipe.tsx**: 카드 탭 시 **뒷면**에 인분 선택(1~4인분 2×2 + "5인분 이상" + 취소). 인분/취소 시 즉시 flippedCardIndex·pendingThemeForServings 초기화. **opacity 크로스페이드만** 사용(앞면 1→0, 뒷면 0→1). 중앙 카드만 앞/뒤 두 면 렌더. 뒤집힌 상태에서 앞면 pointerEvents='none', 뒷면 'box-none'. 카드 TouchableOpacity에 hitSlop·delayPressIn으로 가장자리 탭 인식 개선. 인분 선택 시 generateFinalRecipe(theme, servings), 결과·광장 공유 메타(finalServings 등) 연동.
+- **recipe-detail.tsx**: Plaza 로드 시 relayFromId/relayRootId/relayDepth 매핑, "다른 셰프들!"·"릴레이 요리!" 섹션(relayChildren) 표시. 릴레이 제작 시 params로 create-recipe 이동.
+- **create-recipe 광장 공유**: 릴레이 params가 있으면 Firestore 문서에 relay 필드 함께 저장.
 
 이제 [여기에 Gemini에게 요청할 구체적인 작업 내용을 적어 주세요.]
 ```

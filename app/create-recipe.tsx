@@ -10,7 +10,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, Image } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, interpolate, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import Markdown from 'react-native-markdown-display';
 import { doc, setDoc } from 'firebase/firestore';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -216,6 +216,9 @@ const finishShareToPlaza = async (
   textRecipeResult: string,
   params: any,
   shareKickText: string,
+  servings: number | null,
+  estimatedMinutes: number | null,
+  difficulty: string | null,
 ) => {
   try {
     const currentUser = auth.currentUser;
@@ -223,9 +226,9 @@ const finishShareToPlaza = async (
       Alert.alert('로그인 필요', '요리 광장에 공유하려면 로그인해 주세요.');
       return;
     }
-    const defaultServings = 2;
-    const defaultMinutes = 20;
-    const defaultDifficulty = '보통';
+    const defaultServings = servings ?? 2;
+    const defaultMinutes = estimatedMinutes ?? 20;
+    const defaultDifficulty = difficulty ?? '보통';
     const relayParentId = typeof params.relayParentId === 'string' ? params.relayParentId : undefined;
     const relayRootIdParam = typeof params.relayRootId === 'string' ? params.relayRootId : undefined;
     const relayDepthParam = typeof params.relayDepth === 'string' ? params.relayDepth : undefined;
@@ -582,6 +585,13 @@ export default function CreateRecipeScreen() {
   const [curationScrollX, setCurationScrollX] = useState(0);
   const [curationCarouselWidth, setCurationCarouselWidth] = useState(SCREEN_WIDTH);
   const curationScrollRef = useRef(null); 
+  const [selectedServings, setSelectedServings] = useState<number | null>(2);
+  const [finalServings, setFinalServings] = useState<number | null>(2);
+  const [finalMinutes, setFinalMinutes] = useState<number | null>(20);
+  const [finalDifficulty, setFinalDifficulty] = useState<string>('보통');
+  const [servingSelectVisible, setServingSelectVisible] = useState(false);
+  const [pendingThemeForServings, setPendingThemeForServings] = useState<any | null>(null);
+  const [flippedCardIndex, setFlippedCardIndex] = useState<number | null>(null);
   const [isGeneratingRecipe, setIsGeneratingRecipe] = useState(false);
   const [textRecipeResult, setTextRecipeResult] = useState(null);
   const [shoppingList, setShoppingList] = useState([]);
@@ -631,6 +641,34 @@ export default function CreateRecipeScreen() {
   const wave1AnimatedStyle = useAnimatedStyle(() => ({ opacity: wave1Opacity.value }));
   const wave2AnimatedStyle = useAnimatedStyle(() => ({ transform: [{ translateX: wave2Translate.value }] }));
   const wave3AnimatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: wave3Scale.value }] }));
+
+  // 카드 뒤집기(인분 선택): opacity 크로스페이드만 사용 (transform은 부모 cardTransform과 충돌해 미동작 가능성 있음)
+  const cardFlipProgress = useSharedValue(0);
+  const flipEasing = Easing.bezier(0.25, 0.1, 0.25, 1);
+  const curationCardFrontFaceStyle = useAnimatedStyle(() => {
+    'worklet';
+    const p = cardFlipProgress.value;
+    return { opacity: 1 - p };
+  });
+  const curationCardBackFaceStyle = useAnimatedStyle(() => {
+    'worklet';
+    const p = cardFlipProgress.value;
+    return { opacity: p };
+  });
+
+  // 플립 연출 시간 (원래대로)
+  const FLIP_OPEN_DURATION = 380;
+  const FLIP_CLOSE_DURATION = 320;
+  const FLIP_CLOSE_DELAY = 340;
+
+  useEffect(() => {
+    if (flippedCardIndex === null) return;
+    cardFlipProgress.value = 0;
+    const id = setTimeout(() => {
+      cardFlipProgress.value = withTiming(1, { duration: FLIP_OPEN_DURATION, easing: flipEasing });
+    }, 80);
+    return () => clearTimeout(id);
+  }, [flippedCardIndex]);
 
   useEffect(() => {
     if (params.preferredStyle) {
@@ -761,7 +799,11 @@ export default function CreateRecipeScreen() {
     }
   };
 
-  const generateFinalRecipe = async (theme) => {
+  const generateFinalRecipe = async (theme, servingsOverride?: number) => {
+    const servings = servingsOverride ?? selectedServings ?? 2;
+    const estimatedMinutes = servings <= 2 ? 20 : servings <= 4 ? 25 : 30;
+    const difficulty = servings <= 2 ? '쉬움' : servings <= 4 ? '보통' : '조금 어려움';
+
     setIsGeneratingRecipe(true);
     try {
       const savedDietRaw = await AsyncStorage.getItem('cookdex_diet_goal');
@@ -798,12 +840,13 @@ export default function CreateRecipeScreen() {
             `----------------------\n`
           : '';
 
-      const userContextPrompt = `\n\n--- 👨‍🍳 셰프 맞춤 설정 ---\n${dietText}\n${allergyText}\n${condimentsText}\n----------------------\n`;
+      const userContextPrompt = `\n\n--- 👨‍🍳 셰프 맞춤 설정 ---\n${dietText}\n${allergyText}\n${condimentsText}\n[요리 인분 수]: ${servings}인분 기준으로 요리해.\n----------------------\n`;
       // 🍴 릴레이 모드 프롬프트 주입
       const relayInstruction = isRelayMode ? `\n[🔥 릴레이 챌린지 모드]: 이 레시피는 기존의 '${relayBaseRecipe}' 레시피를 유저만의 방식으로 재해석(Fork)하는 것입니다. 원본의 특징을 살리되, 추가된 재료를 활용해 창의적으로 변형하세요.` : "";
 
       const systemPrompt = `너는 셰프야. 재료(${selectedIngredients.join(', ')})를 가지고 [${theme.theme_title}] 레시피를 작성해.${styleBlock}${userContextPrompt}${relayInstruction}
-⚠️ 필수 지시사항: 각 식재료의 중량을 추정하여 1인분 기준 총 칼로리(kcal)와 핵심 영양성분(탄수화물, 단백질, 지방)을 근사치 100%에 가깝게 계산한 뒤, 레시피 제목 바로 밑에 눈에 띄게 표기해.
+[인분 기준]: 이번 레시피는 반드시 ${servings}인분 기준으로 작성해. 필요한 재료의 분량과 양념/조미료 양도 ${servings}인분에 맞춰 조정해.
+⚠️ 필수 지시사항: 각 식재료의 중량을 추정하여 ${servings}인분 기준 총 칼로리(kcal)와 핵심 영양성분(탄수화물, 단백질, 지방)을 근사치 100%에 가깝게 계산한 뒤, 레시피 제목 바로 밑에 눈에 띄게 표기해.
       
       ⚠️ 중요: 상표권 방어를 위해 레시피 내에 특정 기업의 브랜드명(예: 스팸, 오뚜기 카레 등)은 절대 사용하지 말고, 반드시 '통조림 햄', '카레 가루' 등 일반 명사로 대체할 것.
       ⚠️ 중요: 마크다운 최하단에는 반드시 다음 안내 문구를 정확히 포함시킬 것: "\n\n---\n*※ 본 레시피의 영양 정보 및 조리법은 AI가 추정한 결과로, 실제 식재료의 상태나 조리 환경에 따라 다를 수 있습니다. 위생 및 안전에 유의하여 조리해 주십시오.*"
@@ -834,6 +877,9 @@ export default function CreateRecipeScreen() {
       }
       finalMarkdown = finalMarkdown.replace(/\*\*'([^']+)'\*\*/g, '**$1**').replace(/'\*\*(.+?)\*\*'/g, '**$1**');   
       setTextRecipeResult(finalMarkdown);
+      setFinalServings(servings);
+      setFinalMinutes(estimatedMinutes);
+      setFinalDifficulty(difficulty);
       await AsyncStorage.setItem('cookdex_draft_recipe', JSON.stringify({ ingredients: selectedIngredients, recipe: finalMarkdown, shopping: parsedData.shopping_list }));
     } catch (error) { Alert.alert("에러", "레시피 생성 실패"); setShowBottomModal(false); } finally { setIsGeneratingRecipe(false); }
   };
@@ -1288,6 +1334,9 @@ export default function CreateRecipeScreen() {
                           textRecipeResult,
                           params,
                           shareKickText,
+                          finalServings,
+                          finalMinutes,
+                          finalDifficulty,
                         );
                         setPendingPlazaRecipeId(null);
                         setShareKickModalVisible(false);
@@ -1411,8 +1460,15 @@ export default function CreateRecipeScreen() {
                         onScroll={(e) => setCurationScrollX(e.nativeEvent.contentOffset.x)}
                         onMomentumScrollEnd={(e) => {
                           const x = e.nativeEvent.contentOffset.x;
-                          const index = Math.round(x / CURATION_SNAP);
-                          setCurrentCurationIndex(Math.min(index, curationThemes.length - 1));
+                          const settledIndex = Math.round(x / CURATION_SNAP);
+                          const newIndex = Math.min(settledIndex, curationThemes.length - 1);
+                          setCurrentCurationIndex(newIndex);
+                          // 인분 선택(뒷면)으로 뒤집혀 있는 카드에서 옆으로 슬라이드했으면 자동으로 앞면으로 복귀
+                          if (flippedCardIndex !== null && newIndex !== flippedCardIndex) {
+                            setFlippedCardIndex(null);
+                            setPendingThemeForServings(null);
+                            cardFlipProgress.value = 0;
+                          }
                         }}
                       >
                         {curationThemes.map((theme, index) => {
@@ -1454,7 +1510,17 @@ export default function CreateRecipeScreen() {
                                 },
                               ]}
                             >
-                              <TouchableOpacity onPress={() => generateFinalRecipe(theme)} activeOpacity={0.9}>
+                              <TouchableOpacity
+                                onPress={() => {
+                                  if (flippedCardIndex !== null) return;
+                                  if (currentCurationIndex !== index) return;
+                                  setPendingThemeForServings(theme);
+                                  setFlippedCardIndex(index);
+                                }}
+                                activeOpacity={0.9}
+                                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                                delayPressIn={0}
+                              >
                                   <Animated.View
                                     style={[
                                       styles.curationCard,
@@ -1467,43 +1533,104 @@ export default function CreateRecipeScreen() {
                                       },
                                     ]}
                                   >
-                                  {/* 배경 블러 + 색 오버레이는 같은 3D 컨텍스트 내에서만 절대 배치 */}
-                                  {/* 하얀빛 플래시가 과한 문제를 줄이기 위해 블러 강도와 오버레이 투명도를 낮춤 */}
-                                  <BlurView intensity={isMain ? 18 : 26} tint="light" style={StyleSheet.absoluteFill} />
-                                  <View
-                                    style={[
-                                      StyleSheet.absoluteFill,
-                                      {
-                                        // 기존 '99'(약 60% 알파)에서 '66'(약 40% 알파)로 낮춰 밝은 플래시를 완화
-                                        backgroundColor: (theme.ui_accent_color || '#FF8C00') + '66',
-                                        borderRadius: Radius.lg,
-                                      },
-                                    ]}
-                                  />
-
-                                  {/* 이모지/텍스트 컨텐츠는 Animated.View의 직계 자식으로 두어 함께 3D 회전되도록 함 */}
-                                  <View
-                                    style={[
-                                      styles.curationCardContent,
-                                      {
-                                        transform: [
-                                          { translateY: contentTranslateY },
-                                          { scale: contentScale },
-                                        ],
-                                      },
-                                    ]}
-                                  >
-                                    <Text style={styles.curationCardIcon}>{theme.badge_icon}</Text>
-                                    <Text style={styles.curationCardTitle} numberOfLines={1} ellipsizeMode="tail">
-                                      {theme.theme_title}
-                                    </Text>
-                                    <Text style={styles.curationCardReason} numberOfLines={2} ellipsizeMode="tail">
-                                      {theme.match_reason}
-                                    </Text>
-                                    <Text style={styles.curationCardCopy} numberOfLines={2} ellipsizeMode="tail">
-                                      {pickThemeCopyForTitle(theme.theme_title)}
-                                    </Text>
-                                  </View>
+                                  {/* 중앙 카드만 항상 앞/뒤 두 면 마운트 → Reanimated가 애니메이션을 붙일 수 있음. 탭 시 progress만 0→1로 변경 */}
+                                  {currentCurationIndex === index ? (
+                                    <>
+                                      {/* 앞면: 뒤집힌 상태에선 터치 통과(pointerEvents='none') so 뒷면 버튼이 받음 */}
+                                      <Animated.View
+                                        pointerEvents={flippedCardIndex === index ? 'none' : 'auto'}
+                                        style={[
+                                          StyleSheet.absoluteFill,
+                                          styles.curationCard,
+                                          styles.curationCardGlass,
+                                          {
+                                            width: CURATION_CARD_WIDTH,
+                                            height: CURATION_CARD_HEIGHT,
+                                            borderRadius: Radius.lg,
+                                            overflow: 'hidden',
+                                          },
+                                          curationCardFrontFaceStyle,
+                                        ]}
+                                      >
+                                        <BlurView intensity={isMain ? 18 : 26} tint="light" style={StyleSheet.absoluteFill} />
+                                        <View style={[StyleSheet.absoluteFill, { backgroundColor: (theme.ui_accent_color || '#FF8C00') + '66', borderRadius: Radius.lg }]} />
+                                        <View style={[styles.curationCardContent, { transform: [{ translateY: contentTranslateY }, { scale: contentScale }] }]}>
+                                          <Text style={styles.curationCardIcon}>{theme.badge_icon}</Text>
+                                          <Text style={styles.curationCardTitle} numberOfLines={1} ellipsizeMode="tail">{theme.theme_title}</Text>
+                                          <Text style={styles.curationCardReason} numberOfLines={2} ellipsizeMode="tail">{theme.match_reason}</Text>
+                                          <Text style={styles.curationCardCopy} numberOfLines={2} ellipsizeMode="tail">{pickThemeCopyForTitle(theme.theme_title)}</Text>
+                                        </View>
+                                      </Animated.View>
+                                      {/* 뒷면: 앞면 상태에선 터치 안 받음(pointerEvents='none'), 뒤집힌 상태에서만 버튼 터치 */}
+                                      <Animated.View
+                                        pointerEvents={flippedCardIndex === index ? 'box-none' : 'none'}
+                                        style={[
+                                          StyleSheet.absoluteFill,
+                                          styles.curationCardBackFace,
+                                          {
+                                            width: CURATION_CARD_WIDTH,
+                                            height: CURATION_CARD_HEIGHT,
+                                            backgroundColor: theme.ui_accent_color ? theme.ui_accent_color + 'E6' : '#E8792F',
+                                          },
+                                          curationCardBackFaceStyle,
+                                        ]}
+                                      >
+                                        <Text style={styles.curationCardBackTitle}>몇 인분으로 요리할까요?</Text>
+                                        <View style={styles.curationCardBackButtons}>
+                                          <View style={styles.curationCardBackButtonsGrid}>
+                                            {[1, 2, 3, 4].map((v) => (
+                                              <TouchableOpacity
+                                                key={v}
+                                                style={styles.curationCardBackBtn}
+                                                onPress={() => {
+                                                  setSelectedServings(v);
+                                                  setFlippedCardIndex(null);
+                                                  setPendingThemeForServings(null);
+                                                  cardFlipProgress.value = withTiming(0, { duration: FLIP_CLOSE_DURATION, easing: flipEasing });
+                                                  generateFinalRecipe(theme, v);
+                                                }}
+                                              >
+                                                <Text style={styles.curationCardBackBtnText}>{v}인분</Text>
+                                              </TouchableOpacity>
+                                            ))}
+                                          </View>
+                                          <TouchableOpacity
+                                            style={styles.curationCardBackBtnWide}
+                                            onPress={() => {
+                                              setSelectedServings(5);
+                                              setFlippedCardIndex(null);
+                                              setPendingThemeForServings(null);
+                                              cardFlipProgress.value = withTiming(0, { duration: FLIP_CLOSE_DURATION, easing: flipEasing });
+                                              generateFinalRecipe(theme, 5);
+                                            }}
+                                          >
+                                            <Text style={styles.curationCardBackBtnText}>5인분 이상</Text>
+                                          </TouchableOpacity>
+                                        </View>
+                                        <TouchableOpacity
+                                          style={styles.curationCardBackCancel}
+                                          onPress={() => {
+                                            setFlippedCardIndex(null);
+                                            setPendingThemeForServings(null);
+                                            cardFlipProgress.value = withTiming(0, { duration: FLIP_CLOSE_DURATION, easing: flipEasing });
+                                          }}
+                                        >
+                                          <Text style={styles.curationCardBackCancelText}>취소</Text>
+                                        </TouchableOpacity>
+                                      </Animated.View>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <BlurView intensity={isMain ? 18 : 26} tint="light" style={StyleSheet.absoluteFill} />
+                                      <View style={[StyleSheet.absoluteFill, { backgroundColor: (theme.ui_accent_color || '#FF8C00') + '66', borderRadius: Radius.lg }]} />
+                                      <View style={[styles.curationCardContent, { transform: [{ translateY: contentTranslateY }, { scale: contentScale }] }]}>
+                                        <Text style={styles.curationCardIcon}>{theme.badge_icon}</Text>
+                                        <Text style={styles.curationCardTitle} numberOfLines={1} ellipsizeMode="tail">{theme.theme_title}</Text>
+                                        <Text style={styles.curationCardReason} numberOfLines={2} ellipsizeMode="tail">{theme.match_reason}</Text>
+                                        <Text style={styles.curationCardCopy} numberOfLines={2} ellipsizeMode="tail">{pickThemeCopyForTitle(theme.theme_title)}</Text>
+                                      </View>
+                                    </>
+                                  )}
                                 </Animated.View>
                               </TouchableOpacity>
                             </View>
@@ -1545,15 +1672,15 @@ export default function CreateRecipeScreen() {
                     <View style={styles.metaRow}>
                       <View style={styles.metaChip}>
                         <Ionicons name="people-outline" size={14} color={Colors.textSub} />
-                        <Text style={styles.metaChipText}> 2인분</Text>
+                        <Text style={styles.metaChipText}> {finalServings ?? 2}인분</Text>
                       </View>
                       <View style={styles.metaChip}>
                         <Ionicons name="time-outline" size={14} color={Colors.textSub} />
-                        <Text style={styles.metaChipText}> 20분 이내</Text>
+                        <Text style={styles.metaChipText}> {(finalMinutes ?? 20)}분 이내</Text>
                       </View>
                       <View style={styles.metaChip}>
                         <Ionicons name="star-outline" size={14} color={Colors.textSub} />
-                        <Text style={styles.metaChipText}> 보통</Text>
+                        <Text style={styles.metaChipText}> {finalDifficulty || '보통'}</Text>
                       </View>
                     </View>
 
@@ -2365,6 +2492,136 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: 'rgba(255, 255, 255, 0.92)',
     textAlign: 'center',
+  },
+  curationCardBackFace: {
+    borderRadius: Radius.lg,
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  curationCardBackTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#fff',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  curationCardBackButtons: {
+    width: '100%',
+    marginBottom: 10,
+  },
+  curationCardBackButtonsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 8,
+  },
+  curationCardBackBtn: {
+    width: '48%',
+    minHeight: 56,
+    marginBottom: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+    borderRadius: Radius.lg,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  curationCardBackBtnWide: {
+    width: '100%',
+    minHeight: 56,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: Radius.lg,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  curationCardBackBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  curationCardBackCancel: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+  },
+  curationCardBackCancelText: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.9)',
+    fontWeight: '600',
+  },
+
+  servingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  servingCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: Colors.bgElevated,
+    borderRadius: Radius.xl,
+    paddingHorizontal: 20,
+    paddingVertical: 22,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  servingTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: Colors.textMain,
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  servingSubtitle: {
+    fontSize: 13,
+    color: Colors.textSub,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  servingButtonsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  servingBtn: {
+    minWidth: '30%',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.primarySoft,
+    marginBottom: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  servingBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  servingCancelBtn: {
+    alignSelf: 'center',
+    marginTop: 2,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  servingCancelText: {
+    fontSize: 13,
+    color: Colors.textSub,
   },
 
   recipeScroll: {
