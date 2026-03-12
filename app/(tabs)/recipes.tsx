@@ -1,41 +1,29 @@
 // 파일 위치: app/(tabs)/recipes.tsx
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Voice from '@react-native-voice/voice';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as Speech from 'expo-speech';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, FlatList, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Colors, Radius, Shadows } from '../../constants/design-tokens';
 
 export default function RecipesScreen() {
+  const router = useRouter();
   const [savedRecipes, setSavedRecipes] = useState([]);
   const [selectedRecipe, setSelectedRecipe] = useState(null);
   const [modalVisible, setModalVisible] = useState(false);
   const [shoppingModalVisible, setShoppingModalVisible] = useState(false);
-  const [measureModalVisible, setMeasureModalVisible] = useState(false);
   const [searchIngredient, setSearchIngredient] = useState("");
+  const [isDeleteMode, setIsDeleteMode] = useState(false);
+  const [selectedIdsForDelete, setSelectedIdsForDelete] = useState<string[]>([]);
 
   // 🚨 TTS 조리 모드 상태
   const [isCookingMode, setIsCookingMode] = useState(false);
   const [cookingSteps, setCookingSteps] = useState([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
-
-  useEffect(() => {
-    Voice.onSpeechResults = (e) => {
-      const text = e.value[0]?.toLowerCase() || "";
-      if (text.includes('다음') || text.includes('next')) {
-        // '다음'이라고 말하면 다음 스텝으로 이동
-        setCurrentStepIndex(prev => Math.min(prev + 1, cookingSteps.length - 1));
-      } else if (text.includes('이전') || text.includes('back')) {
-        // '이전'이라고 말하면 이전 스텝으로 이동
-        setCurrentStepIndex(prev => Math.max(prev - 1, 0));
-      }
-    };
-    return () => { Voice.destroy().then(Voice.removeAllListeners); };
-  }, [cookingSteps.length]);
 
   const handleShoppingSearch = () => {
     if (!searchIngredient.trim()) {
@@ -63,18 +51,54 @@ export default function RecipesScreen() {
     }, [])
   );
 
-  // 특정 레시피 삭제 기능
-  const deleteRecipe = async (id) => {
-    Alert.alert("삭제 확인", "이 레시피를 내 주방에서 버리시겠습니까?", [
-      { text: "취소", style: "cancel" },
-      { text: "삭제", style: "destructive", onPress: async () => {
-          const updatedRecipes = savedRecipes.filter(r => r.id !== id);
-          setSavedRecipes(updatedRecipes);
-          await AsyncStorage.setItem('cookdex_saved_recipes', JSON.stringify(updatedRecipes));
-          setModalVisible(false);
-        }
-      }
-    ]);
+  // 삭제 모드 토글
+  const handleHeaderDeletePress = () => {
+    if (!isDeleteMode) {
+      setIsDeleteMode(true);
+      setSelectedIdsForDelete([]);
+      return;
+    }
+    // 삭제 모드에서 상단 "삭제하기" 버튼은 최종 삭제 역할
+    confirmBulkDelete();
+  };
+
+  const toggleSelectForDelete = (id: string) => {
+    setSelectedIdsForDelete(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id],
+    );
+  };
+
+  const selectAllForDelete = () => {
+    if (selectedIdsForDelete.length === savedRecipes.length) {
+      setSelectedIdsForDelete([]);
+    } else {
+      setSelectedIdsForDelete(savedRecipes.map(r => r.id));
+    }
+  };
+
+  const confirmBulkDelete = async () => {
+    if (selectedIdsForDelete.length === 0) {
+      Alert.alert("알림", "삭제할 레시피를 선택해 주세요.");
+      return;
+    }
+    Alert.alert(
+      "삭제 확인",
+      `선택한 ${selectedIdsForDelete.length}개의 레시피를 내 주방에서 삭제할까요?`,
+      [
+        { text: "취소", style: "cancel" },
+        {
+          text: "삭제",
+          style: "destructive",
+          onPress: async () => {
+      const updatedRecipes = savedRecipes.filter(r => !selectedIdsForDelete.includes(r.id));
+            setSavedRecipes(updatedRecipes);
+            await AsyncStorage.setItem('cookdex_saved_recipes', JSON.stringify(updatedRecipes));
+      setSelectedIdsForDelete([]);
+      setIsDeleteMode(false);
+          },
+        },
+      ],
+    );
   };
 
   // 긴 마크다운 텍스트 안에서 첫 번째 '# 제목' 부분만 잘라내어 카드 썸네일용으로 쓰는 함수
@@ -98,8 +122,7 @@ export default function RecipesScreen() {
         try { await activateKeepAwakeAsync(); } catch(e){}
       }
       if (voice === 'true') {
-        setIsVoiceActive(true);
-        try { await Voice.start('ko-KR'); } catch(e) { console.log("음성 모듈 초기화 필요", e); }
+        setIsVoiceActive(false);
       }
     };
     checkSettings();
@@ -107,7 +130,7 @@ export default function RecipesScreen() {
   const handleNextStep = () => { if (currentStepIndex < cookingSteps.length - 1) { Speech.stop(); setCurrentStepIndex(prev => prev + 1); Speech.speak(cookingSteps[currentStepIndex + 1], { language: 'ko-KR', rate: 0.95 }); } };
   const handlePrevStep = () => { if (currentStepIndex > 0) { Speech.stop(); setCurrentStepIndex(prev => prev - 1); Speech.speak(cookingSteps[currentStepIndex - 1], { language: 'ko-KR', rate: 0.95 }); } };
   const handleReplayStep = () => { Speech.stop(); Speech.speak(cookingSteps[currentStepIndex], { language: 'ko-KR', rate: 0.95 }); };
-  const handleExitCookingMode = async () => { Speech.stop(); setIsCookingMode(false); try { await deactivateKeepAwake(); } catch(e){} try { await Voice.stop(); } catch(e){} setIsVoiceActive(false); };
+  const handleExitCookingMode = async () => { Speech.stop(); setIsCookingMode(false); try { await deactivateKeepAwake(); } catch(e){} setIsVoiceActive(false); };
 
   const handleVerifyCooking = async () => {
     // 실제 배포 시에는 expo-image-picker로 카메라 연동하지만, 일단 게이미피케이션 로직을 위해 Mock 구현
@@ -126,21 +149,47 @@ export default function RecipesScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* 상단 헤더 */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>내 주방</Text>
-        <Text style={styles.headerSub}>내가 저장한 레시피 북</Text>
+        <View>
+          <Text style={styles.headerTitle}>나의 레시피 북</Text>
+          <Text style={styles.headerSub}>내가 저장한 레시피를 한눈에 모아봤어요.</Text>
+        </View>
+        {savedRecipes.length > 0 && (
+          <View style={styles.headerRight}>
+            {/* 위 줄: 삭제 모드일 때만 보이는 전체/취소 (높이는 항상 유지해서 레이아웃 안 흔들리게) */}
+            {isDeleteMode && (
+              <View style={styles.headerSecondaryRow}>
+                <TouchableOpacity style={styles.headerSecondaryBtn} onPress={selectAllForDelete}>
+                  <Text style={styles.headerSecondaryText}>전체</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.headerSecondaryBtn}
+                  onPress={() => {
+                    setIsDeleteMode(false);
+                    setSelectedIdsForDelete([]);
+                  }}
+                >
+                  <Text style={styles.headerSecondaryText}>취소</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* 아래 줄: 항상 같은 위치에 있는 최종 삭제 버튼 */}
+            <TouchableOpacity
+              style={styles.headerDeleteBtn}
+              onPress={handleHeaderDeletePress}
+            >
+              <Text style={styles.headerDeleteText}>삭제하기</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
-      <TouchableOpacity style={styles.measureGuideBtn} onPress={() => setMeasureModalVisible(true)}>
-        <Text style={styles.measureGuideBtnText}>기본 계량 가이드</Text>
-      </TouchableOpacity>
-
-      {/* 레시피 리스트 렌더링 */}
       {savedRecipes.length === 0 ? (
         <View style={styles.emptyState}>
+          <Text style={styles.emptyEmoji}>📖</Text>
           <Text style={styles.emptyText}>아직 저장된 레시피가 없습니다.</Text>
-          <Text style={styles.emptySubText}>홈이나 스캐너에서 레시피를 만들어 저장해보세요.</Text>
+          <Text style={styles.emptySubText}>홈이나 스캐너에서 레시피를 만든 뒤 내 주방에 담아보세요.</Text>
         </View>
       ) : (
         <FlatList
@@ -148,23 +197,40 @@ export default function RecipesScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContainer}
           showsVerticalScrollIndicator={false}
-          renderItem={({ item }) => (
+          renderItem={({ item }) => {
+            const isSelected = selectedIdsForDelete.includes(item.id);
+            return (
             <TouchableOpacity 
-              style={styles.recipeCard} 
+              style={[
+                styles.recipeCard,
+                isDeleteMode && styles.recipeCardDeletable,
+                isDeleteMode && isSelected && styles.recipeCardSelected,
+              ]} 
               activeOpacity={0.8}
-              onPress={() => { setSelectedRecipe(item); setModalVisible(true); }}
+              onPress={() => {
+                if (isDeleteMode) {
+                  toggleSelectForDelete(item.id);
+                } else {
+                  router.push({
+                    pathname: '/recipe-detail',
+                    params: { source: 'saved', id: item.id },
+                  });
+                }
+              }}
             >
               <View style={styles.cardHeader}>
                 <Text style={styles.cardDate}>{item.date}</Text>
+                <View style={styles.bookmarkPill}>
+                  <Text style={styles.bookmarkPillText}>저장됨 🔖</Text>
+                </View>
               </View>
               <Text style={styles.cardTitle} numberOfLines={2}>{extractTitle(item.content)}</Text>
               <Text style={styles.cardPreview} numberOfLines={2}>{item.content.replace(/#/g, '').replace(/\*/g, '').trim()}</Text>
             </TouchableOpacity>
-          )}
+          )}}
         />
       )}
 
-      {/* 상세 보기 바텀 모달 */}
       <Modal visible={modalVisible} transparent={true} animationType="slide" onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -184,16 +250,14 @@ export default function RecipesScreen() {
               <View style={{height: 30}}/>
             </ScrollView>
 
-            {/* 🚨 추가될 요리 인증 버튼 */}
-            <TouchableOpacity style={{backgroundColor: '#4CAF50', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginTop: 15}} onPress={handleVerifyCooking}>
-              <Text style={{color: '#fff', fontSize: 16, fontWeight: '900'}}>요리 완성 인증하기</Text>
+            <TouchableOpacity style={styles.verifyBtn} onPress={handleVerifyCooking}>
+              <Text style={styles.verifyBtnText}>요리 완성 인증하기</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.shoppingBtn} onPress={() => setShoppingModalVisible(true)}>
               <Text style={styles.shoppingBtnText}>부족한 재료 온라인 검색</Text>
             </TouchableOpacity>
-            {/* 🚨 버튼 간격 축소 (20 -> 10) */}
-            <View style={{height: 10}}/>
+            <View style={styles.modalSpacingSmall} />
 
             <TouchableOpacity style={styles.deleteBtn} onPress={() => deleteRecipe(selectedRecipe?.id)}>
               <Text style={styles.deleteBtnText}>🗑️ 이 레시피 삭제하기</Text>
@@ -202,7 +266,6 @@ export default function RecipesScreen() {
         </View>
       </Modal>
 
-      {/* 🛒 쇼핑 검색 모달 */}
       <Modal visible={shoppingModalVisible} transparent={true} animationType="fade" onRequestClose={() => setShoppingModalVisible(false)}>
         <KeyboardAvoidingView 
           behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
@@ -210,7 +273,7 @@ export default function RecipesScreen() {
         >
           <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setShoppingModalVisible(false)} />
           <View style={styles.shoppingModalContent}>
-              <Text style={styles.shoppingTitle}>온라인 장보기</Text>
+            <Text style={styles.shoppingTitle}>온라인 장보기</Text>
             <Text style={styles.shoppingSub}>부족한 식재료를 온라인에서 바로 검색해 보세요.</Text>
             <TextInput 
               style={styles.styleInput} 
@@ -227,7 +290,6 @@ export default function RecipesScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* 🚨 TTS 전체화면 모달 */}
       <Modal visible={isCookingMode} transparent={false} animationType="slide">
         <SafeAreaView style={styles.ttsContainer}>
           <View style={styles.ttsHeader}>
@@ -236,8 +298,8 @@ export default function RecipesScreen() {
           </View>
           <View style={styles.ttsBody}>
             {isVoiceActive && (
-              <View style={{ backgroundColor: 'rgba(255, 140, 0, 0.2)', padding: 10, borderRadius: 20, marginBottom: 20, borderWidth: 1, borderColor: '#FF8C00' }}>
-                <Text style={{ color: '#FFB347', fontWeight: 'bold' }}>음성 명령 활성화됨 ("다음", "이전" 대기 중)</Text>
+              <View style={styles.voiceBadge}>
+                <Text style={styles.voiceBadgeText}>🎙️ 음성 명령 활성화됨 ("다음", "이전" 대기 중)</Text>
               </View>
             )}
             <Text style={styles.ttsBigText}>{cookingSteps[currentStepIndex]}</Text>
@@ -250,92 +312,441 @@ export default function RecipesScreen() {
         </SafeAreaView>
       </Modal>
 
-      <Modal visible={measureModalVisible} transparent={true} animationType="fade" onRequestClose={() => setMeasureModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.measureModalContent}>
-            <Text style={styles.measureTitle}>쿡덱스 기본 계량표</Text>
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.measureItem}>• 1큰술 (1T) = 15ml (어른 밥숟가락 1가득)</Text>
-              <Text style={styles.measureItem}>• 1작은술 (1t) = 5ml (티스푼 1가득)</Text>
-              <Text style={styles.measureItem}>• 1컵 (1Cup) = 200ml (일반 종이컵 가득)</Text>
-              <Text style={styles.measureItem}>• 1꼬집 = 엄지와 검지로 집은 양 (약 2g)</Text>
-              <Text style={styles.measureItem}>• 약간 = 2~3꼬집 정도의 양</Text>
-              <Text style={styles.measureItem}>• 한 줌 = 한 손에 가득 쥐어지는 양</Text>
-            </ScrollView>
-            <TouchableOpacity style={styles.measureCloseBtn} onPress={() => setMeasureModalVisible(false)}>
-              <Text style={styles.measureCloseBtnText}>확인했습니다</Text>
-            </TouchableOpacity>
-          </View>
+      {isDeleteMode && savedRecipes.length > 0 && (
+        <View style={styles.deleteToolbar}>
+          <TouchableOpacity style={styles.deleteToolbarBtn} onPress={selectAllForDelete}>
+            <Text style={styles.deleteToolbarBtnText}>
+              {selectedIdsForDelete.length === savedRecipes.length ? "선택 해제" : "일괄 선택"}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.deleteToolbarBtn,
+              selectedIdsForDelete.length === 0 && { opacity: 0.4 },
+            ]}
+            onPress={confirmBulkDelete}
+            disabled={selectedIdsForDelete.length === 0}
+          >
+            <Text style={[styles.deleteToolbarBtnText, { color: Colors.danger }]}>
+              선택 삭제
+            </Text>
+          </TouchableOpacity>
         </View>
-      </Modal>
+      )}
     </SafeAreaView>
   );
 }
 
 const markdownStyles = StyleSheet.create({ 
-  body: { color: '#3A2E2B', fontSize: 15, lineHeight: 24 }, 
-  heading1: { color: '#FF8C00', fontSize: 22, fontWeight: 'bold' }, 
-  blockquote: { backgroundColor: '#F9F5F3', borderLeftWidth: 4, borderLeftColor: '#4CAF50', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5, marginVertical: 10 }
+  body: { color: Colors.textMain, fontSize: 15, lineHeight: 24 }, 
+  heading1: { color: Colors.primary, fontSize: 22, fontWeight: 'bold' }, 
+  blockquote: {
+    backgroundColor: Colors.primarySoft,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.success,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    marginVertical: 10,
+  },
 });
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFDF9' },
-  header: { padding: 20, paddingTop: Platform.OS === 'android' ? 50 : 20, backgroundColor: '#2A2421', borderBottomLeftRadius: 24, borderBottomRightRadius: 24, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.2, shadowRadius: 5, elevation: 5 },
-  headerTitle: { fontSize: 26, fontWeight: '900', color: '#FFFDF9', marginBottom: 5 },
-  headerSub: { fontSize: 14, color: '#A89F9C' },
-  
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
-  emptyEmoji: { fontSize: 50, marginBottom: 15 },
-  emptyText: { fontSize: 18, fontWeight: 'bold', color: '#3A2E2B', marginBottom: 8 },
-  emptySubText: { fontSize: 14, color: '#8C7A76', textAlign: 'center' },
-  
-  listContainer: { padding: 20, paddingBottom: 100 },
-  recipeCard: { backgroundColor: '#fff', padding: 20, borderRadius: 16, marginBottom: 15, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.05, shadowRadius: 6, elevation: 3, borderWidth: 1, borderColor: '#E8D5D0' },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  cardDate: { fontSize: 12, color: '#A89F9C', fontWeight: 'bold' },
-  cardTitle: { fontSize: 18, fontWeight: 'bold', color: '#FF8C00', marginBottom: 8, lineHeight: 24 },
-  cardPreview: { fontSize: 13, color: '#8C7A76', lineHeight: 20 },
-  
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalContent: { height: '85%', backgroundColor: '#FFFDF9', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -5 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 10 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#E8D5D0' },
-  modalDate: { fontSize: 14, fontWeight: 'bold', color: '#8C7A76' },
-  closeBtn: { backgroundColor: '#F5EBE7', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15 },
-  closeBtnText: { color: '#3A2E2B', fontSize: 13, fontWeight: 'bold' },
-  markdownScroll: { flex: 1 },
-  deleteBtn: { backgroundColor: '#FFEBEE', paddingVertical: 15, borderRadius: 12, alignItems: 'center', marginTop: 15, borderWidth: 1, borderColor: '#FFCDD2' },
-  deleteBtnText: { color: '#C62828', fontSize: 15, fontWeight: 'bold' },
-  shoppingModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  shoppingBtn: { backgroundColor: '#0073E9', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginTop: 15 },
-  shoppingBtnText: { color: '#fff', fontSize: 16, fontWeight: '900' },
-  shoppingModalContent: { backgroundColor: '#3A322F', borderRadius: 24, padding: 25, borderWidth: 1, borderColor: '#0073E9', position: 'relative', width: '100%' },
-  shoppingTitle: { fontSize: 22, fontWeight: '900', color: '#0073E9', marginBottom: 10, textAlign: 'center' },
-  shoppingSub: { fontSize: 14, color: '#FFFDF9', textAlign: 'center', marginBottom: 20 },
-  styleInput: { backgroundColor: '#2A2421', color: '#FFFDF9', borderRadius: 12, padding: 15, fontSize: 16, borderWidth: 1, borderColor: '#5A4E49', marginBottom: 20 },
-  shoppingSubmitBtn: { backgroundColor: '#0073E9', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginBottom: 12 },
-  shoppingSubmitBtnText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  container: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
+  },
+  header: {
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? 32 : 16,
+    paddingBottom: 16,
+    backgroundColor: Colors.bgMain,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+  },
+  headerRight: {
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: Colors.textMain,
+    marginBottom: 4,
+  },
+  headerSub: {
+    fontSize: 13,
+    color: Colors.textSub,
+  },
+  headerDeleteBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  headerDeleteText: {
+    fontSize: 12,
+    color: Colors.actionDelete,
+    fontWeight: '700',
+  },
+  headerSecondaryRow: {
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 0,
+    marginBottom: 6,
+    opacity: 1,
+  },
+  headerSecondaryBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.bgElevated,
+  },
+  headerSecondaryText: {
+    fontSize: 11,
+    color: Colors.textSub,
+    fontWeight: '600',
+  },
+  deleteControlsContainer: {
+    minHeight: 0,
+    paddingHorizontal: 20,
+    paddingBottom: 4,
+  },
 
-  // 🚨 TTS Styles
-  ttsStartBtn: { backgroundColor: '#E3F2FD', paddingVertical: 15, borderRadius: 15, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#CE93D8' }, 
-  ttsStartBtnText: { color: '#8E24AA', fontSize: 15, fontWeight: '900' }, 
-  ttsContainer: { flex: 1, backgroundColor: '#2A2421', padding: 20, justifyContent: 'space-between' }, 
-  ttsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 }, 
-  ttsStepIndicator: { color: '#FFB347', fontSize: 18, fontWeight: 'bold' }, 
-  ttsCloseBtn: { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 20 }, 
-  ttsCloseBtnText: { color: '#fff', fontWeight: 'bold' }, 
-  ttsBody: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10 }, 
-  ttsBigText: { color: '#FFFDF9', fontSize: 32, fontWeight: '900', textAlign: 'center', lineHeight: 45 }, 
-  ttsControls: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 }, 
-  ttsBtn: { backgroundColor: '#4A3F3A', paddingVertical: 20, flex: 1, borderRadius: 20, alignItems: 'center', marginHorizontal: 5 }, 
-  ttsBtnText: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold' }, 
-  ttsBtnMain: { backgroundColor: '#FF8C00', paddingVertical: 25, flex: 1.5, borderRadius: 25, alignItems: 'center', marginHorizontal: 5, shadowColor: '#FF8C00', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 }, 
-  ttsBtnMainText: { color: '#fff', fontSize: 18, fontWeight: '900' },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  emptyEmoji: {
+    fontSize: 48,
+    marginBottom: 12,
+  },
+  emptyText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: Colors.textMain,
+    marginBottom: 6,
+  },
+  emptySubText: {
+    fontSize: 13,
+    color: Colors.textSub,
+    textAlign: 'center',
+  },
 
-  measureGuideBtn: { backgroundColor: '#4A3F3A', marginHorizontal: 20, marginTop: 15, paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
-  measureGuideBtnText: { color: '#FFB347', fontSize: 14, fontWeight: 'bold' },
-  measureModalContent: { backgroundColor: '#2A2421', borderRadius: 20, padding: 25, borderWidth: 1, borderColor: '#FF8C00', width: '90%', alignSelf: 'center' },
-  measureTitle: { color: '#FF8C00', fontSize: 20, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
-  measureItem: { color: '#FFFDF9', fontSize: 15, marginBottom: 12, lineHeight: 22 },
-  measureCloseBtn: { backgroundColor: '#FF8C00', paddingVertical: 15, borderRadius: 12, alignItems: 'center', marginTop: 20 },
-  measureCloseBtnText: { color: '#000', fontSize: 16, fontWeight: 'bold' },
+  listContainer: {
+    paddingHorizontal: 20,
+    paddingBottom: 100,
+    paddingTop: 8,
+  },
+  recipeCard: {
+    backgroundColor: Colors.bgElevated,
+    padding: 18,
+    borderRadius: Radius.xl,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.soft,
+  },
+  recipeCardDeletable: {
+    borderStyle: 'dashed',
+  },
+  recipeCardSelected: {
+    borderColor: Colors.actionDelete,
+    backgroundColor: Colors.bgMuted,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  cardDate: {
+    fontSize: 12,
+    color: Colors.textSub,
+    fontWeight: '500',
+  },
+  bookmarkPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primarySoft,
+  },
+  bookmarkPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: Colors.textMain,
+    marginBottom: 6,
+    lineHeight: 23,
+  },
+  cardPreview: {
+    fontSize: 13,
+    color: Colors.textSub,
+    lineHeight: 20,
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: Colors.overlayDark,
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    height: '85%',
+    backgroundColor: Colors.bgModal,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: 20,
+    ...Shadows.glassDiffused,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  modalDate: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.textSub,
+  },
+  closeBtn: {
+    backgroundColor: Colors.primarySoft,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Radius.pill,
+  },
+  closeBtnText: {
+    color: Colors.primary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  markdownScroll: {
+    flex: 1,
+  },
+  verifyBtn: {
+    backgroundColor: Colors.success,
+    paddingVertical: 15,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  verifyBtnText: {
+    color: Colors.textInverse,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  shoppingModalOverlay: {
+    flex: 1,
+    backgroundColor: Colors.overlayDark,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  shoppingBtn: {
+    backgroundColor: Colors.actionShop,
+    paddingVertical: 16,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  shoppingBtnText: {
+    color: Colors.textInverse,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  shoppingModalContent: {
+    backgroundColor: Colors.bgElevated,
+    borderRadius: Radius.xl,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: Colors.actionShop,
+    width: '100%',
+  },
+  shoppingTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: Colors.actionShop,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  shoppingSub: {
+    fontSize: 13,
+    color: Colors.textSub,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  styleInput: {
+    backgroundColor: Colors.bgMuted,
+    color: Colors.textMain,
+    borderRadius: Radius.md,
+    padding: 14,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 18,
+  },
+  shoppingSubmitBtn: {
+    backgroundColor: Colors.actionShop,
+    paddingVertical: 14,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  shoppingSubmitBtnText: {
+    color: Colors.textInverse,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  // TTS Styles
+  ttsStartBtn: {
+    backgroundColor: Colors.primarySoft,
+    paddingVertical: 15,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  ttsStartBtnText: {
+    color: Colors.primary,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  ttsContainer: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
+    padding: 20,
+    justifyContent: 'space-between',
+  },
+  ttsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  ttsStepIndicator: {
+    color: Colors.primary,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  ttsCloseBtn: {
+    backgroundColor: Colors.bgElevated,
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    borderRadius: Radius.pill,
+  },
+  ttsCloseBtnText: {
+    color: Colors.textMain,
+    fontWeight: '600',
+  },
+  ttsBody: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  voiceBadge: {
+    backgroundColor: Colors.primarySoft,
+    padding: 10,
+    borderRadius: Radius.pill,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  voiceBadgeText: {
+    color: Colors.primary,
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  ttsBigText: {
+    color: Colors.textMain,
+    fontSize: 28,
+    fontWeight: '900',
+    textAlign: 'center',
+    lineHeight: 40,
+  },
+  ttsControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  ttsBtn: {
+    backgroundColor: Colors.bgMuted,
+    paddingVertical: 18,
+    flex: 1,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginHorizontal: 5,
+  },
+  ttsBtnText: {
+    color: Colors.textMain,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  ttsBtnMain: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 20,
+    flex: 1.5,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginHorizontal: 5,
+    ...Shadows.glassTight,
+  },
+  ttsBtnMainText: {
+    color: Colors.textInverse,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+
+  modalSpacingSmall: {
+    height: 10,
+  },
+  deleteBtn: {
+    backgroundColor: Colors.bgElevated,
+    paddingVertical: 15,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: Colors.actionDelete,
+  },
+  deleteBtnText: {
+    color: Colors.actionDelete,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  deleteToolbar: {
+    // legacy 스타일 (사용 안 함)
+    paddingHorizontal: 20,
+    paddingVertical: 0,
+  },
+  deleteToolbarBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteToolbarBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textMain,
+  },
 });

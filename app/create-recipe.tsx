@@ -7,13 +7,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, Image } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import Markdown from 'react-native-markdown-display';
 import { doc, setDoc } from 'firebase/firestore';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Radius, Shadows } from '../constants/design-tokens';
-import { auth, db } from '../firebaseConfig';
+import { auth, db, storage } from '../firebaseConfig';
 
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
 const RECIPE_TYPES = ["메인 디쉬", "디저트", "음료/칵테일", "간단한 간식", "술안주", "샐러드/다이어트"];
@@ -38,6 +40,259 @@ const extractJSON = (rawText) => {
     return JSON.parse(rawText.substring(start, end + 1));
   } catch (e) { return null; }
 };
+
+type ParsedRecipeSections = {
+  ingredients: string[];
+  steps: string[];
+  tips: string[];
+};
+
+const parseRecipeSections = (content: string): ParsedRecipeSections => {
+  const normalized = content.replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+
+  let currentSection: 'none' | 'ingredients' | 'steps' | 'tips' = 'none';
+  const ingredients: string[] = [];
+  const steps: string[] = [];
+  const tips: string[] = [];
+
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    if (/^#\s+/.test(line)) continue;
+
+    if (/^##\s+/.test(line)) {
+      const lower = line.toLowerCase();
+      if (lower.includes('재료')) {
+        currentSection = 'ingredients';
+      } else if (lower.includes('조리 순서') || lower.includes('조리순서') || lower.includes('만드는 법')) {
+        currentSection = 'steps';
+      } else if (lower.includes('요리 팁') || lower.includes('쿡덱스의 킥') || lower.includes('팁')) {
+        currentSection = 'tips';
+      } else {
+        currentSection = 'none';
+      }
+      continue;
+    }
+
+    if (currentSection === 'ingredients') {
+      const text = line.replace(/^[-*]\s*/, '');
+      if (text) ingredients.push(text);
+    } else if (currentSection === 'steps') {
+      const text = line
+        .replace(/^\d+\.\s*/, '')
+        .replace(/^[-*]\s*/, '')
+        .trim();
+      if (text) steps.push(text);
+    } else if (currentSection === 'tips') {
+      const text = line.replace(/^[-*]\s*/, '');
+      if (text) tips.push(text);
+    }
+  }
+
+  return { ingredients, steps, tips };
+};
+
+const extractTitle = (content: string): string => {
+  const match = content.match(/#\s+(.*)/);
+  return match ? match[1] : 'AI 레시피';
+};
+
+type ParsedStylePreference = {
+  dishName?: string;
+  cookingMethod?: string;
+  styleFreeText?: string;
+};
+
+const COOKING_METHOD_KEYWORDS = [
+  '볶음',
+  '탕',
+  '국',
+  '찌개',
+  '튀김',
+  '조림',
+  '구이',
+  '찜',
+  '비빔',
+];
+
+const parseStylePreference = (raw: string): ParsedStylePreference => {
+  const text = raw.trim();
+  if (!text) return {};
+
+  let dishName: string | undefined;
+  let cookingMethod: string | undefined;
+  let styleFreeText = text;
+
+  // 1) 요리 이름 후보 추출 (예: 고등어 조림, 비빔밥, 닭볶음탕 등)
+  const dishPattern =
+    /([가-힣A-Za-z0-9\s]+?(덮밥|볶음밥|비빔밥|탕|찌개|국|조림|구이|볶음|파스타|스테이크|샐러드|수프|스프))/;
+  const dishMatch = text.match(dishPattern);
+  if (dishMatch && dishMatch[1]) {
+    dishName = dishMatch[1].trim();
+    styleFreeText = styleFreeText.replace(dishMatch[1], '').trim();
+  }
+
+  // 2) 조리 방식 키워드 추출
+  for (const keyword of COOKING_METHOD_KEYWORDS) {
+    if (text.includes(keyword)) {
+      cookingMethod = keyword;
+      if (!styleFreeText) break;
+    }
+  }
+
+  // 3) 남은 문장은 자유 설명으로 사용
+  return {
+    dishName,
+    cookingMethod,
+    styleFreeText: styleFreeText || undefined,
+  };
+};
+
+const STYLE_INAPPROPRIATE_WORDS = [
+  '욕설',
+  '비방',
+  '모욕',
+  '정치',
+  '선거',
+  '대통령',
+  '국회의원',
+  '종교',
+  '일베',
+  '워마드',
+];
+
+const DANGEROUS_STYLE_PATTERNS = [
+  '생닭을 그대로',
+  '익히지 않고 먹',
+  '익히지않고 먹',
+  '세제',
+  '표백제',
+  '락스',
+  '청소용 액체',
+  '소독약',
+];
+
+const checkStyleSafety = (raw: string): string | null => {
+  const text = raw.trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+
+  if (STYLE_INAPPROPRIATE_WORDS.some((w) => text.includes(w))) {
+    return '요리 스타일 설명에 부적절한 단어가 포함되어 있어요.\n조리와 관련된 표현만 입력해 주세요.';
+  }
+
+  if (DANGEROUS_STYLE_PATTERNS.some((w) => text.includes(w))) {
+    return '안전하지 않은 조리 방식이나 식재료 조합이 포함되어 있어요.\n위생과 안전을 고려해서 다시 작성해 주세요.';
+  }
+
+  // 아주 단순한 생식 경고
+  if (lower.includes('생닭') && (lower.includes('그대로') || lower.includes('익히지'))) {
+    return '생닭은 반드시 완전히 익혀서 드셔야 해요.\n안전한 조리 방식을 입력해 주세요.';
+  }
+
+  return null;
+};
+
+type StyleModerationResult = 'ok' | 'block';
+
+// TODO: 나중에 Gemini Pro(API) 호출로 교체할 래퍼 함수.
+// 현재는 네트워크 호출 없이 항상 'ok'를 반환하는 모킹 구현입니다.
+const moderateStyleWithLLM = async (text: string): Promise<StyleModerationResult> => {
+  const trimmed = text.trim();
+  if (!trimmed) return 'ok';
+
+  // 여기에서 나중에 Gemini Pro 분류 API를 호출해
+  // 'OK' / 'BLOCK' 같은 결과를 받아서 매핑하면 됩니다.
+  // 예: 응답이 BLOCK이면 'block', 아니면 'ok' 반환.
+
+  return 'ok';
+};
+
+const finishShareToPlaza = async (
+  plazaRecipeId: string,
+  photoUri: string,
+  textRecipeResult: string,
+  params: any,
+  shareKickText: string,
+) => {
+  try {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      Alert.alert('로그인 필요', '요리 광장에 공유하려면 로그인해 주세요.');
+      return;
+    }
+    const defaultServings = 2;
+    const defaultMinutes = 20;
+    const defaultDifficulty = '보통';
+    const relayParentId = typeof params.relayParentId === 'string' ? params.relayParentId : undefined;
+    const relayRootIdParam = typeof params.relayRootId === 'string' ? params.relayRootId : undefined;
+    const relayDepthParam = typeof params.relayDepth === 'string' ? params.relayDepth : undefined;
+    let finalPhotoUrl = photoUri;
+    // 로컬 URI인 경우에는 여기에서 업로드 처리
+    if (photoUri && !photoUri.startsWith('http')) {
+      try {
+        const response = await fetch(photoUri);
+        const blob = await response.blob();
+        const storageRef = ref(
+          storage,
+          `recipePhotos/${plazaRecipeId}/${currentUser.uid || 'anonymous'}-${Date.now()}.jpg`,
+        );
+        await uploadBytes(storageRef, blob);
+        finalPhotoUrl = await getDownloadURL(storageRef);
+      } catch (e) {
+        console.log('share recipe photo upload error', e);
+        // 업로드 실패 시에는 로컬 URI라도 그대로 사용
+      }
+    }
+
+    const payload: Record<string, unknown> = {
+      id: plazaRecipeId,
+      content: textRecipeResult,
+      authorId: currentUser.uid,
+      authorName: currentUser.displayName || currentUser.email?.split('@')[0] || '익명',
+      createdAt: new Date().toISOString(),
+      likes: 0,
+      recipePhotoUrl: finalPhotoUrl,
+      servings: defaultServings,
+      estimatedMinutes: defaultMinutes,
+      difficulty: defaultDifficulty,
+    };
+    if (shareKickText.trim()) {
+      payload.chefKick = shareKickText.trim();
+    }
+    if (relayParentId) {
+      payload.relayFromId = relayParentId;
+      payload.relayRootId = relayRootIdParam || plazaRecipeId;
+      payload.relayDepth = relayDepthParam != null ? Number(relayDepthParam) : 0;
+    }
+    await setDoc(doc(db, 'global_recipes', plazaRecipeId), payload);
+    Alert.alert('셰프님의 요리가 광장에 게시되었습니다! 🎉', '요리 광장에서 다른 셰프들과 함께 공유되었어요.');
+  } catch (err) {
+    Alert.alert('공유 실패', '광장 등록에 실패했습니다. 네트워크를 확인해 주세요.');
+  }
+};
+
+// 양념/조미료 판별을 위한 키워드 리스트 (간단 휴리스틱)
+const SEASONING_KEYWORDS = [
+  '소금',
+  '설탕',
+  '간장',
+  '진간장',
+  '고추장',
+  '고춧가루',
+  '참기름',
+  '후추',
+  '마요네즈',
+  '된장',
+  '식초',
+  '액젓',
+  '굴소스',
+  '양념',
+  '조미료',
+  '소스',
+];
 
 // 3가지 추천 카드용 카피 템플릿: 요리 이름 패턴에 따라 어울리는 한 줄 문구를 붙여서 카드가 휑해 보이지 않도록 함
 const THEME_COPY_TEMPLATES: { [key: string]: string[] } = {
@@ -149,18 +404,129 @@ const callGeminiAPI = async (systemPrompt, imageParts = []) => {
 
     // 최종 레시피 생성용 목업
     if (systemPrompt.includes('recipe_markdown')) {
-      return {
-        safety_warning: null,
-        substitutions: [],
-        shopping_list: ['대파', '참기름', '깨소금'],
-        recipe_markdown: `# 불고기덮밥
+      const mocks = [
+        {
+          safety_warning: null,
+          substitutions: [],
+          shopping_list: ['대파', '참기름', '깨소금'],
+          recipe_markdown: `# 불고기덮밥
 
-1인분 기준 불고기덮밥 예시 레시피입니다. 실제 조리와 영양 정보는 참고용으로만 사용하세요.
+## 필요한 재료
+- 소고기 불고기용 | 150g
+- 양파 | 1/2개
+- 식용유 | 1큰술
+- 밥 | 1공기
+- 간장 | 1.5큰술
+- 설탕 | 1큰술
+- 다진 마늘 | 1작은술
+- 참기름 | 1작은술
+- 깨소금 | 약간
+- 대파 | 조금
 
-1. 소고기와 양파를 기름에 볶아 불고기 양념으로 간을 맞춥니다.
-2. 그릇에 뜨거운 밥을 담고, 볶은 불고기를 올립니다.
-3. 대파와 깨소금을 뿌려 마무리합니다.`,
-      };
+## 조리 순서
+1. 양파를 채 썰고, 대파는 송송 썰어 준비합니다.
+2. 달군 팬에 식용유를 두르고 소고기와 양파를 넣어 볶습니다.
+3. 고기가 반쯤 익으면 간장, 설탕, 다진 마늘을 넣어 불고기 양념을 입혀 볶아줍니다.
+4. 그릇에 뜨거운 밥을 담고 위에 완성된 불고기를 올립니다.
+5. 대파, 참기름, 깨소금을 뿌려 마무리합니다.
+
+## 요리 팁 (쿡덱스의 킥)
+- 양파를 충분히 볶아 단맛을 끌어내면 불고기 맛이 더 깊어집니다.
+- 고기를 너무 오래 익히면 질겨지니 양념이 배면 바로 불을 줄여 주세요.
+- 밥 대신 곤약밥이나 현미밥을 사용하면 포만감은 유지하면서 더 가볍게 즐길 수 있습니다.`,
+        },
+        {
+          safety_warning: null,
+          substitutions: [],
+          shopping_list: ['김치', '두부', '대파'],
+          recipe_markdown: `# 얼큰김치찌개
+
+## 필요한 재료
+- 신 김치 | 1컵
+- 돼지고기 앞다리살 | 100g
+- 두부 | 1/2모
+- 양파 | 1/4개
+- 대파 | 1대
+- 식용유 | 1큰술
+- 물 | 2컵
+- 고춧가루 | 1큰술
+- 간장 | 1큰술
+- 다진 마늘 | 1작은술
+- 소금 | 약간
+
+## 조리 순서
+1. 김치는 한 입 크기로 자르고, 돼지고기와 채소를 먹기 좋게 썰어 둡니다.
+2. 냄비에 식용유를 두르고 돼지고기와 김치를 먼저 볶아 김치향을 살립니다.
+3. 물을 붓고 끓이다가 양파, 두부, 대파를 넣어 10분 정도 더 끓입니다.
+4. 고춧가루, 간장, 다진 마늘로 간을 맞추고 마지막에 소금으로 간을 조절합니다.
+
+## 요리 팁 (쿡덱스의 킥)
+- 김치를 충분히 볶아줘야 국물 맛이 깊어집니다.
+- 물 대신 쌀뜨물을 사용하면 더 고소한 맛을 느낄 수 있어요.
+- 두부는 너무 오래 끓이면 부서지니 마지막에 넣어 살짝만 끓여주세요.`,
+        },
+        {
+          safety_warning: null,
+          substitutions: [],
+          shopping_list: ['베이컨', '생크림', '파마산 치즈'],
+          recipe_markdown: `# 크림파스타
+
+## 필요한 재료
+- 스파게티면 | 1인분
+- 베이컨 | 3줄
+- 양파 | 1/4개
+- 마늘 | 2쪽
+- 올리브유 | 1큰술
+- 생크림 | 1컵
+- 우유 | 1/2컵
+- 소금 | 약간
+- 후추 | 약간
+- 파마산 치즈가루 | 2큰술
+
+## 조리 순서
+1. 스파게티면을 포장지에 적힌 시간보다 1분 덜 삶습니다.
+2. 팬에 올리브유를 두르고 마늘, 양파, 베이컨을 볶아 향을 냅니다.
+3. 생크림과 우유를 넣고 중약불에서 살짝 끓입니다.
+4. 삶은 면을 넣고 소금, 후추, 파마산 치즈가루로 간을 맞추며 졸입니다.
+
+## 요리 팁 (쿡덱스의 킥)
+- 면을 너무 오래 삶지 말고 약간 덜 익힌 상태에서 소스와 함께 졸여야 식감이 좋습니다.
+- 소스가 너무 되직하면 우유를 조금 더 넣어 농도를 조절하세요.
+- 베이컨 대신 버섯을 듬뿍 넣으면 보다 가벼운 크림 파스타가 됩니다.`,
+        },
+        {
+          safety_warning: null,
+          substitutions: [],
+          shopping_list: ['두부', '간장', '다진 마늘'],
+          recipe_markdown: `# 두부스테이크
+
+## 필요한 재료
+- 단단한 두부 | 1모
+- 양파 | 1/4개
+- 당근 | 2큰술 (잘게 다진 것)
+- 식용유 | 2큰술
+- 소금 | 약간
+- 후추 | 약간
+- 간장 | 1.5큰술
+- 올리고당 | 1큰술
+- 다진 마늘 | 1작은술
+- 물 | 3큰술
+
+## 조리 순서
+1. 두부의 물기를 키친타월로 충분히 제거한 뒤 잘게 으깨 줍니다.
+2. 잘게 다진 양파와 당근을 두부와 섞고 소금, 후추로 간을 한 뒤 동그랗게 빚습니다.
+3. 팬에 기름을 두르고 중불에서 두부스테이크를 앞뒤로 노릇하게 굽습니다.
+4. 다른 팬에 간장, 올리고당, 다진 마늘, 물을 넣고 한 번 끓여 소스를 만듭니다.
+5. 구운 두부스테이크 위에 소스를 끼얹어 완성합니다.
+
+## 요리 팁 (쿡덱스의 킥)
+- 두부의 물기를 충분히 빼야 모양이 잘 잡히고 식감이 좋아집니다.
+- 기호에 따라 잘게 썬 버섯이나 파프리카를 추가해도 좋습니다.
+- 남은 소스는 밥에 비벼 먹어도 맛있어요.`,
+        },
+      ];
+      const idx = Math.floor(Date.now() / 1000) % mocks.length;
+      return mocks[idx];
     }
   }
 
@@ -229,16 +595,29 @@ export default function CreateRecipeScreen() {
   const [customTasteInput, setCustomTasteInput] = useState("");
 
   const [styleModalVisible, setStyleModalVisible] = useState(false);
+  const [styleDishName, setStyleDishName] = useState("");
+  const [styleMethod, setStyleMethod] = useState("");
+  const [styleExtra, setStyleExtra] = useState("");
   const [preferredStyle, setPreferredStyle] = useState("");
 
   const [isCookingMode, setIsCookingMode] = useState(false);
-  const [cookingSteps, setCookingSteps] = useState([]);
+  const [cookingSteps, setCookingSteps] = useState<string[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
 
   // 🍴 릴레이 레시피 상태 (New)
   const [isRelayMode, setIsRelayMode] = useState(false);
   const [relayBaseRecipe, setRelayBaseRecipe] = useState("");
+  const [showIngredientShopModal, setShowIngredientShopModal] = useState(false);
+  const [ingredientShopList, setIngredientShopList] = useState<string[]>([]);
+  const [measureModalVisible, setMeasureModalVisible] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saved'>('idle');
+  const [hasPersistedRecipe, setHasPersistedRecipe] = useState(false);
+  const [shareRecipePhotoUrl, setShareRecipePhotoUrl] = useState<string | null>(null);
+  const [shareKickModalVisible, setShareKickModalVisible] = useState(false);
+  const [shareKickPhotoUri, setShareKickPhotoUri] = useState<string | null>(null);
+  const [shareKickText, setShareKickText] = useState('');
+  const [pendingPlazaRecipeId, setPendingPlazaRecipeId] = useState<string | null>(null);
 
   // 배경 파도 애니메이션 (Reanimated)
   const wave1Opacity = useSharedValue(0.3);
@@ -289,6 +668,22 @@ export default function CreateRecipeScreen() {
       Alert.alert("릴레이 모드", `[${params.forkFrom}] 레시피를 바탕으로 나만의 어레인지를 만듭니다.`);
     }
   }, [params.forkFrom]);
+
+  // 릴레이 재료 프리필
+  useEffect(() => {
+    if (params.relayIngredients) {
+      const raw = Array.isArray(params.relayIngredients) ? params.relayIngredients[0] : params.relayIngredients;
+      const list = raw.split(',').map(s => s.trim()).filter(Boolean);
+      if (list.length === 0) return;
+      setSelectedIngredients(prev => {
+        const merged = [...prev];
+        list.forEach(ing => {
+          if (!merged.includes(ing)) merged.push(ing);
+        });
+        return merged;
+      });
+    }
+  }, [params.relayIngredients]);
 
   const toggleIngredient = (ing) => {
     if (selectedIngredients.includes(ing)) {
@@ -379,16 +774,49 @@ export default function CreateRecipeScreen() {
       const allergyText = savedAllergies && savedAllergies !== "없음" ? `[🚨치명적 경고🚨 알레르기 및 기피 재료: ${savedAllergies}] 이 재료들은 레시피에 절대 포함시키지 마!` : "";
       const condimentsText = savedCondimentsRaw ? `[보유 중인 기본 양념/향신료: ${JSON.parse(savedCondimentsRaw).join(', ')}] 이 재료들은 이미 집에 있으니 '부족한 구매 리스트'에서 빼고 자유롭게 써 줘.` : "";
 
+      let dishName: string | undefined;
+      let cookingMethod: string | undefined;
+      let styleFreeText: string | undefined;
+
+      if (styleDishName.trim() || styleMethod.trim() || styleExtra.trim()) {
+        dishName = styleDishName.trim() || undefined;
+        cookingMethod = styleMethod.trim() || undefined;
+        styleFreeText = styleExtra.trim() || undefined;
+      } else {
+        const stylePreferenceText = preferredStyle?.trim() || "";
+        const parsed = parseStylePreference(stylePreferenceText);
+        dishName = parsed.dishName;
+        cookingMethod = parsed.cookingMethod;
+        styleFreeText = parsed.styleFreeText;
+      }
+      const styleBlock =
+        dishName || cookingMethod || styleFreeText
+          ? `\n--- 🧾 사용자 지정 요리 방향 ---\n` +
+            `${dishName ? `- 원하는 요리 이름: ${dishName}\n` : ''}` +
+            `${cookingMethod ? `- 원하는 조리 방식: ${cookingMethod}\n` : ''}` +
+            `${styleFreeText ? `- 추가 설명: ${styleFreeText}\n` : ''}` +
+            `----------------------\n`
+          : '';
+
       const userContextPrompt = `\n\n--- 👨‍🍳 셰프 맞춤 설정 ---\n${dietText}\n${allergyText}\n${condimentsText}\n----------------------\n`;
       // 🍴 릴레이 모드 프롬프트 주입
       const relayInstruction = isRelayMode ? `\n[🔥 릴레이 챌린지 모드]: 이 레시피는 기존의 '${relayBaseRecipe}' 레시피를 유저만의 방식으로 재해석(Fork)하는 것입니다. 원본의 특징을 살리되, 추가된 재료를 활용해 창의적으로 변형하세요.` : "";
 
-      const systemPrompt = `너는 셰프야. 재료(${selectedIngredients.join(', ')})를 가지고 [${theme.theme_title}] 레시피를 작성해.${userContextPrompt}${relayInstruction}\n⚠️ 필수 지시사항: 각 식재료의 중량을 추정하여 1인분 기준 총 칼로리(kcal)와 핵심 영양성분(탄수화물, 단백질, 지방)을 근사치 100%에 가깝게 계산한 뒤, 레시피 제목 바로 밑에 눈에 띄게 표기해.
+      const systemPrompt = `너는 셰프야. 재료(${selectedIngredients.join(', ')})를 가지고 [${theme.theme_title}] 레시피를 작성해.${styleBlock}${userContextPrompt}${relayInstruction}
+⚠️ 필수 지시사항: 각 식재료의 중량을 추정하여 1인분 기준 총 칼로리(kcal)와 핵심 영양성분(탄수화물, 단백질, 지방)을 근사치 100%에 가깝게 계산한 뒤, 레시피 제목 바로 밑에 눈에 띄게 표기해.
       
       ⚠️ 중요: 상표권 방어를 위해 레시피 내에 특정 기업의 브랜드명(예: 스팸, 오뚜기 카레 등)은 절대 사용하지 말고, 반드시 '통조림 햄', '카레 가루' 등 일반 명사로 대체할 것.
       ⚠️ 중요: 마크다운 최하단에는 반드시 다음 안내 문구를 정확히 포함시킬 것: "\n\n---\n*※ 본 레시피의 영양 정보 및 조리법은 AI가 추정한 결과로, 실제 식재료의 상태나 조리 환경에 따라 다를 수 있습니다. 위생 및 안전에 유의하여 조리해 주십시오.*"
+
+      ⚠️ 안전 규칙: 사용자가 비현실적이거나 안전하지 않은 조리 방식을 요구하더라도, 반드시 위생·안전 기준을 지키는 방향으로 재해석해서 레시피를 작성해. 특히 고기·닭·생선·계란은 충분히 익혀야 하고, 세제/표백제/청소용 화학물질은 절대 사용하지 마.
       
-      반드시 아래 JSON 형식으로만 대답해. 마크다운(\`\`\`json 등) 절대 금지.\n{ "safety_warning": "위생 경고 필요시 작성, 없으면 null", "substitutions": [ { "original": "필요한데 유저가 입력 안한 재료", "substitute": "대체재", "reason": "대체 이유" } ], "shopping_list": ["대체불가 필수 마트 구매 재료"], "recipe_markdown": "무조건 첫 줄은 '# ${theme.theme_title}'. 조리 순서는 무조건 '1. ', '2. ' 같은 숫자로 시작할 것." }`;
+      반드시 아래 JSON 형식으로만 대답해. 마크다운(\`\`\`json 등) 절대 금지.
+{ 
+  "safety_warning": "위생 경고 필요시 작성, 없으면 null", 
+  "substitutions": [ { "original": "필요한데 유저가 입력 안한 재료", "substitute": "대체재", "reason": "대체 이유" } ], 
+  "shopping_list": ["대체불가 필수 마트 구매 재료"], 
+  "recipe_markdown": "아래 구조를 정확히 지킬 것:\n# ${theme.theme_title}\n\n## 필요한 재료\n- 재료 1 이름 + 분량\n- 재료 2 이름 + 분량\n...\n\n## 조리 순서\n1. 단계별 설명 문장\n2. 단계별 설명 문장\n...\n\n## 요리 팁 (쿡덱스의 킥)\n- 이 레시피를 더 맛있게 먹는 팁\n- 재료 대체 / 보관 팁\n(위 섹션 제목과 숫자/불릿 형식을 반드시 그대로 사용할 것)" 
+}`;
       
       const parsedData = await callGeminiAPI(systemPrompt);
 
@@ -434,32 +862,133 @@ export default function CreateRecipeScreen() {
     setIsVoiceActive(false);
   };
 
+  const confirmCancelShareKick = () => {
+    Alert.alert(
+      '취소 확인',
+      '이전 사항이 저장되지 않습니다. 정말 취소할까요?',
+      [
+        { text: '아니요', style: 'cancel' },
+        {
+          text: '네, 취소할게요',
+          style: 'destructive',
+          onPress: () => {
+            setShareKickModalVisible(false);
+            setPendingPlazaRecipeId(null);
+          },
+        },
+      ],
+      { cancelable: true },
+    );
+  };
+
   const isFromThemeFlow = !!(params.directStyle && params.directIngredients);
 
   const handleCloseModal = () => {
-    if (textRecipeResult || curationThemes) {
+    // 아직 한 번도 저장/공유하지 않았고, 레시피/추천이 있는 경우에만 경고
+    if (!hasPersistedRecipe && (textRecipeResult || curationThemes)) {
       Alert.alert("앗! 잠깐만요 🛑", "아직 레시피를 저장하지 않았어요. 창을 닫으시겠습니까?", [
         { text: "취소", style: "cancel" },
-        { text: "닫기", style: "destructive", onPress: () => {
-          setShowBottomModal(false);
-          if (isFromThemeFlow) router.replace('/(tabs)');
-        } },
+        {
+          text: "닫기",
+          style: "destructive",
+          onPress: () => {
+            setShowBottomModal(false);
+            if (isFromThemeFlow) router.replace('/(tabs)');
+          },
+        },
       ]);
-    } else {
-      setShowBottomModal(false);
-      if (isFromThemeFlow) router.replace('/(tabs)');
+      return;
     }
+
+    // 이미 한 번이라도 저장/공유가 된 경우에는 바로 닫기
+    setShowBottomModal(false);
+    if (isFromThemeFlow) router.replace('/(tabs)');
   };
 
-  const handleRecipeSaveAndShare = async (isSharing) => {
-    if (!textRecipeResult) return;
+  const pickAndUploadRecipePhoto = async (targetRecipeId: string): Promise<string | null> => {
+    return new Promise((resolve) => {
+      Alert.alert(
+        '완성 요리 사진 필요',
+        '완성된 레시피의 실제 요리 사진을 찍으시면 광장에 공유하실 수 있습니다!\n\n공유를 위해 촬영해주세요.',
+        [
+          {
+            text: '취소하기',
+            style: 'cancel',
+            onPress: () => resolve(null),
+          },
+          {
+            text: '촬영하기',
+            onPress: async () => {
+              try {
+                const { status } = await ImagePicker.requestCameraPermissionsAsync();
+                if (status !== 'granted') {
+                  Alert.alert('권한 필요', '완성 요리 사진을 찍기 위해 카메라 권한을 허용해 주세요.');
+                  resolve(null);
+                  return;
+                }
+                const result = await ImagePicker.launchCameraAsync({
+                  allowsEditing: true,
+                  quality: 0.8,
+                });
+                if (result.canceled || !result.assets || result.assets.length === 0) {
+                  resolve(null);
+                  return;
+                }
+                const uri = result.assets[0].uri;
+                resolve(uri);
+              } catch (e) {
+                console.log('share recipe photo upload error', e);
+                Alert.alert(
+                  '안내',
+                  '사진을 서버에 업로드하지는 못했지만, 이 기기에서는 완성 사진이 함께 보이도록 공유할게요.',
+                );
+                resolve(null);
+              }
+            },
+          },
+        ],
+        { cancelable: true },
+      );
+    });
+  };
+
+  const handleRecipeSaveAndShare = async (isSharing: boolean) => {
+    if (!textRecipeResult) {
+      Alert.alert('알림', '먼저 AI 레시피를 생성해 주세요.');
+      return;
+    }
+
     try {
-      const recipeId = Date.now().toString();
-      const newRecipe = { id: recipeId, date: new Date().toLocaleDateString(), content: textRecipeResult };
+      // 현재 내 주방 목록만 기준으로 중복 판단. 사용자가 해당 레시피를 삭제했다면 목록에서 제거되므로, 같은 내용이라도 다시 저장 가능.
       const existingData = await AsyncStorage.getItem('cookdex_saved_recipes');
-      const savedRecipes = existingData ? JSON.parse(existingData) : [];
-      savedRecipes.unshift(newRecipe);
-      await AsyncStorage.setItem('cookdex_saved_recipes', JSON.stringify(savedRecipes));
+      const savedRecipes: { id: string; date: string; content: string }[] = existingData ? JSON.parse(existingData) : [];
+
+      const alreadyExists = savedRecipes.some(r => r.content === textRecipeResult);
+
+      if (alreadyExists) {
+        if (!isSharing) {
+          Alert.alert('알림', '이미 저장된 레시피입니다!');
+        }
+        // 저장 여부와 상관없이, 공유 플로우는 계속 진행 가능하도록 함
+      }
+
+      // 이미 저장된 레시피가 있다면 그 id를 재사용하고, 없으면 새로 저장 (로컬 저장용 id)
+      let recipeId = Date.now().toString();
+      let nextSaved = savedRecipes;
+      if (alreadyExists) {
+        const existing = savedRecipes.find(r => r.content === textRecipeResult);
+        if (existing) {
+          recipeId = existing.id;
+        }
+      } else {
+        const newRecipe = { id: recipeId, date: new Date().toLocaleDateString(), content: textRecipeResult };
+        nextSaved = [newRecipe, ...savedRecipes];
+        await AsyncStorage.setItem('cookdex_saved_recipes', JSON.stringify(nextSaved));
+        setSaveState('saved');
+      }
+      // 여기까지 왔다는 것은 최소 한 번은 로컬에 저장된 상태이므로,
+      // 모달 닫기 경고에서는 "저장됨"으로 취급한다.
+      setHasPersistedRecipe(true);
 
       if (isSharing) {
         const currentUser = auth.currentUser;
@@ -467,30 +996,45 @@ export default function CreateRecipeScreen() {
           Alert.alert('로그인 필요', '요리 광장에 공유하려면 로그인해 주세요.');
           return;
         }
-        try {
-          await setDoc(doc(db, 'global_recipes', recipeId), {
-            id: recipeId,
-            content: textRecipeResult,
-            authorId: currentUser.uid,
-            authorName: currentUser.displayName || currentUser.email?.split('@')[0] || '익명',
-            createdAt: new Date().toISOString(),
-            likes: 0,
-          });
-          Alert.alert('광장에 등록 완료! 🌍', '요리 광장 피드에 레시피가 공유되었습니다.', [
-            { text: '확인', onPress: () => router.push('/(tabs)/plaza') },
-          ]);
-        } catch (err) {
-          Alert.alert('공유 실패', '광장 등록에 실패했습니다. 네트워크를 확인해 주세요.');
+        // 광장 공유용 id는 항상 새로 발급하여, 같은 레시피를 여러 번 공유하거나
+        // 릴레이를 제작할 때마다 Firestore 문서가 덮어쓰여지지 않도록 한다.
+        const plazaRecipeId = Date.now().toString();
+
+        const photoUrl = await pickAndUploadRecipePhoto(plazaRecipeId);
+        if (!photoUrl) {
+          // 사용자가 카메라를 취소했거나 업로드에 실패한 경우 공유 중단
+          return;
         }
+        setPendingPlazaRecipeId(plazaRecipeId);
+        setShareKickPhotoUri(photoUrl);
+        setShareKickText('');
+        setShareKickModalVisible(true);
         return;
       }
+
       Alert.alert('저장됨', '레시피가 저장되었습니다.');
-    } catch (error) { Alert.alert('오류', '저장에 실패했습니다.'); }
+    } catch (error) {
+      Alert.alert('오류', '저장에 실패했습니다.');
+    }
   };
 
   const handleShopping = (item) => {
     const coupangSearchUrl = `https://m.coupang.com/nm/search?q=${encodeURIComponent(item)}`;
     Linking.openURL(coupangSearchUrl).catch((err) => console.error('쇼핑몰 연결 실패', err));
+  };
+
+  const openIngredientShopFromResult = () => {
+    if (!textRecipeResult) return;
+    const sections = parseRecipeSections(textRecipeResult);
+    const names = sections.ingredients
+      .map(raw => raw.split('|')[0].replace(/^[-*]\s*/, '').trim())
+      .filter(Boolean);
+    if (names.length === 0) {
+      Alert.alert("알림", "인식된 재료가 없습니다.");
+      return;
+    }
+    setIngredientShopList(names);
+    setShowIngredientShopModal(true);
   };
 
   const requestNewStyle = () => {
@@ -500,6 +1044,11 @@ export default function CreateRecipeScreen() {
     if (finalType) styleStr += `요리 종류: ${finalType}, `;
     if (finalTaste) styleStr += `맛/분위기: ${finalTaste}`;
     if (!styleStr) { Alert.alert("알림", "원하시는 요리 종류나 맛을 선택해주세요!"); return; }
+    const warning = checkStyleSafety(styleStr);
+    if (warning) {
+      Alert.alert('알림', warning);
+      return;
+    }
     setShowStyleModal(false); getCurationThemes(styleStr);
   };
 
@@ -589,16 +1138,65 @@ export default function CreateRecipeScreen() {
             <TouchableOpacity style={styles.closeIconBtn} onPress={() => setStyleModalVisible(false)}>
               <Text style={styles.closeIconText}>✕</Text>
             </TouchableOpacity>
-            <Text style={styles.modalTitle}>어떤 스타일로 요리할까요? 🍳</Text>
-            <Text style={styles.modalSub}>원하는 맛이나 분위기를 알려주세요.</Text>
-            <TextInput 
-              style={styles.styleInput} 
-              placeholder="예: 볶음밥, 얼큰한 찌개, 오븐 구이 등" 
+            <Text style={styles.modalTitle}>나만의 요리 스타일 추가!</Text>
+            <Text style={styles.modalSub}>원하시는 요리&조리 방법이 있나요?</Text>
+
+            <Text style={styles.styleInputLabel}>원하는 요리</Text>
+            <TextInput
+              style={styles.styleInput}
+              placeholder="예: 라면, 비빔밥, 고등어 조림"
               placeholderTextColor="#A89F9C"
-              value={preferredStyle}
-              onChangeText={setPreferredStyle}
+              value={styleDishName}
+              onChangeText={setStyleDishName}
             />
-            <TouchableOpacity style={styles.generateBtn} onPress={() => { setStyleModalVisible(false); getCurationThemes(preferredStyle); }}>
+
+            <Text style={styles.styleInputLabel}>원하는 조리</Text>
+            <TextInput
+              style={styles.styleInput}
+              placeholder="예: 볶음, 찌개, 튀김, 자작하게 끓이는 등"
+              placeholderTextColor="#A89F9C"
+              value={styleMethod}
+              onChangeText={setStyleMethod}
+            />
+
+            <Text style={styles.styleInputLabel}>스타일 추가</Text>
+            <TextInput
+              style={styles.styleInput}
+              placeholder="예: 싱겁게 먹을 수 있는 미역국, 아이도 먹을 수 있게 매운맛은 거의 없이 등"
+              placeholderTextColor="#A89F9C"
+              value={styleExtra}
+              onChangeText={setStyleExtra}
+              multiline
+            />
+            <TouchableOpacity
+              style={styles.generateBtn}
+              onPress={async () => {
+                const parts: string[] = [];
+                if (styleDishName.trim()) parts.push(`원하는 요리 이름: ${styleDishName.trim()}`);
+                if (styleMethod.trim()) parts.push(`원하는 조리 방식: ${styleMethod.trim()}`);
+                if (styleExtra.trim()) parts.push(`추가 설명: ${styleExtra.trim()}`);
+                const combined = parts.join('\n');
+
+                const warning = checkStyleSafety(combined);
+                if (warning) {
+                  Alert.alert('알림', warning);
+                  return;
+                }
+
+                const moderation = await moderateStyleWithLLM(combined);
+                if (moderation === 'block') {
+                  Alert.alert(
+                    '알림',
+                    '요리와 관련 없는 내용이나 부적절한 표현이 포함되어 있어요.\n요리/조리와 관련된 설명만 입력해 주세요.',
+                  );
+                  return;
+                }
+
+                setPreferredStyle(combined);
+                setStyleModalVisible(false);
+                getCurationThemes(combined);
+              }}
+            >
               <Text style={styles.generateBtnText}>이 스타일로 추천받기</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.skipBtn} onPress={() => { setPreferredStyle(""); setStyleModalVisible(false); getCurationThemes(""); }}>
@@ -606,6 +1204,139 @@ export default function CreateRecipeScreen() {
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* 광장 공유 전 셰프의 킥 & 사진 확인 모달 */}
+      <Modal
+        visible={shareKickModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShareKickModalVisible(false)}
+      >
+        <View style={styles.modalOverlayCenter}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={confirmCancelShareKick}
+          />
+          <View
+            style={[
+              styles.bottomSheetContainer,
+              { maxHeight: '80%', paddingBottom: 16, borderRadius: 20 },
+            ]}
+          >
+            <View style={styles.dragHandle} />
+            <Text style={styles.shareKickTitle}>셰프의 킥!</Text>
+            {shareKickPhotoUri && (
+              <View style={styles.shareKickImageWrap}>
+                <Image source={{ uri: shareKickPhotoUri }} style={styles.shareKickImage} resizeMode="cover" />
+              </View>
+            )}
+            <View style={styles.shareKickRetakeRow}>
+              <TouchableOpacity
+                style={styles.shareKickRetakeBtn}
+                onPress={() => {
+                  if (!pendingPlazaRecipeId) return;
+                  Alert.alert(
+                    '다시 촬영',
+                    '요리의 사진을 다시 찍겠습니까?',
+                    [
+                      { text: '아니요', style: 'cancel' },
+                      {
+                        text: '찍을래요',
+                        onPress: async () => {
+                          const newUrl = await pickAndUploadRecipePhoto(pendingPlazaRecipeId);
+                          if (newUrl) {
+                            setShareKickPhotoUri(newUrl);
+                          }
+                        },
+                      },
+                    ],
+                    { cancelable: true },
+                  );
+                }}
+              >
+                <Text style={styles.shareKickRetakeText}>다시 찍기</Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={[styles.styleInput, styles.shareKickInput, { height: 110, textAlignVertical: 'top' }]}
+              placeholder={'추가/변경하신 사항을 자유롭게 적어주세요! 안 적고 제출하셔도 OK!'}
+              placeholderTextColor="#A89F9C"
+              value={shareKickText}
+              onChangeText={setShareKickText}
+              multiline
+            />
+            <TouchableOpacity
+              style={styles.shareKickConfirmBtn}
+              onPress={() => {
+                if (!pendingPlazaRecipeId || !shareKickPhotoUri || !textRecipeResult) {
+                  setShareKickModalVisible(false);
+                  return;
+                }
+                Alert.alert(
+                  '공유 확인',
+                  '이대로 공유하시겠습니까?',
+                  [
+                    { text: '아니요', style: 'cancel' },
+                    {
+                      text: '네, 공유할게요',
+                      onPress: async () => {
+                        await finishShareToPlaza(
+                          pendingPlazaRecipeId,
+                          shareKickPhotoUri,
+                          textRecipeResult,
+                          params,
+                          shareKickText,
+                        );
+                        setPendingPlazaRecipeId(null);
+                        setShareKickModalVisible(false);
+                      },
+                    },
+                  ],
+                  { cancelable: true },
+                );
+              }}
+            >
+              <Text style={styles.shareKickConfirmText}>이대로 광장에 공유하기</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.skipBtn}
+              onPress={confirmCancelShareKick}
+            >
+              <Text style={styles.skipBtnText}>취소</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 재료 장보기 모달 */}
+      <Modal
+        visible={showIngredientShopModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowIngredientShopModal(false)}
+      >
+        <View style={styles.modalOverlayCenter}>
+          <View style={[styles.bottomSheetContainer, { height: 'auto', maxHeight: '70%', paddingBottom: 24, borderRadius: 20 }]}>
+            <View style={styles.dragHandle} />
+            <Text style={styles.styleModalTitle}>🛒 이 레시피 재료 장보기</Text>
+            <ScrollView>
+              {ingredientShopList.map((name, idx) => (
+                <TouchableOpacity
+                  key={`${name}-${idx}`}
+                  style={styles.commerceBtn}
+                  onPress={() => handleShopping(name)}
+                >
+                  <Text style={styles.commerceBtnText}>{name} 검색하기</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={[styles.styleModalCancel, { marginTop: 12 }]} onPress={() => setShowIngredientShopModal(false)}>
+              <Text style={styles.styleModalBtnText}>닫기</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       {/* 🚨 [UI 개선] 추천/결과 표시 — 로딩·카드 모두 같은 꽉 찬 페이지 배경 */}
@@ -800,30 +1531,224 @@ export default function CreateRecipeScreen() {
 
               {isGeneratingRecipe && (<View style={styles.loadingBoxFull}><ActivityIndicator size="large" color="#4CAF50" /><Text style={[styles.loadingText, { color: Colors.textMain }]}>선택하신 요리의 레시피를 작성 중입니다...</Text></View>)}
 
-              {!isGeneratingRecipe && textRecipeResult && (
-                <ScrollView style={styles.recipeScroll} showsVerticalScrollIndicator={false}>
-                  <TouchableOpacity style={styles.ttsStartBtn} onPress={startCookingMode}><Text style={styles.ttsStartBtnText}>조리 모드로 듣기</Text></TouchableOpacity>
-                  <Markdown style={markdownStyles}>{textRecipeResult}</Markdown>
-                  {shoppingList && shoppingList.length > 0 && (
-                    <View style={styles.commerceSection}>
-                      <Text style={styles.commerceTitle}>🛒 부족한 필수 재료 바로 구매하기</Text>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap: 10}}>
-                        {shoppingList.map((item, idx) => (
-                          <TouchableOpacity key={idx} style={styles.commerceBtn} onPress={() => handleShopping(item)}><Text style={styles.commerceBtnText}>{item} 검색 🔍</Text></TouchableOpacity>
-                        ))}
-                      </ScrollView>
+              {!isGeneratingRecipe && textRecipeResult && (() => {
+                const sections = parseRecipeSections(textRecipeResult);
+                const hasStructuredSections =
+                  sections.ingredients.length > 0 || sections.steps.length > 0 || sections.tips.length > 0;
+
+                return (
+                  <ScrollView style={styles.recipeScroll} showsVerticalScrollIndicator={false}>
+                    <Text style={styles.generatedTitle}>
+                      {extractTitle(textRecipeResult)}
+                    </Text>
+
+                    <View style={styles.metaRow}>
+                      <View style={styles.metaChip}>
+                        <Ionicons name="people-outline" size={14} color={Colors.textSub} />
+                        <Text style={styles.metaChipText}> 2인분</Text>
+                      </View>
+                      <View style={styles.metaChip}>
+                        <Ionicons name="time-outline" size={14} color={Colors.textSub} />
+                        <Text style={styles.metaChipText}> 20분 이내</Text>
+                      </View>
+                      <View style={styles.metaChip}>
+                        <Ionicons name="star-outline" size={14} color={Colors.textSub} />
+                        <Text style={styles.metaChipText}> 보통</Text>
+                      </View>
                     </View>
-                  )}
-                  <View style={{height: 40}} /> 
-                </ScrollView>
-              )}
+
+                    <TouchableOpacity style={styles.ttsPill} onPress={startCookingMode}>
+                      <Text style={styles.ttsPillText}>🔊 조리 모드로 듣기</Text>
+                    </TouchableOpacity>
+
+                    {hasStructuredSections ? (
+                      <>
+                        {sections.ingredients.length > 0 && (() => {
+                          const baseItems: { key: string; label: string; length: number }[] = [];
+                          const seasoningItems: { key: string; label: string; length: number }[] = [];
+
+                          sections.ingredients.forEach((raw, index) => {
+                            const [nameRaw, amountRaw] = raw.split('|').map(part => part.trim());
+                            const name = nameRaw || '';
+                            const amount = amountRaw || '';
+                            const label = amount ? `${name} ${amount}` : name;
+                            const target = SEASONING_KEYWORDS.some(k => name.includes(k)) ? seasoningItems : baseItems;
+                            target.push({ key: `ing-${index}`, label, length: label.length });
+                          });
+
+                          const buildRows = (items: { key: string; label: string; length: number }[]) => {
+                            const sorted = [...items].sort((a, b) => a.length - b.length);
+                            const rows: { key: string; items: typeof items }[] = [];
+                            let currentRow: typeof items = [];
+
+                            sorted.forEach((item) => {
+                              const isLong = item.length > 14;
+                              if (currentRow.length === 0) {
+                                currentRow.push(item);
+                              } else if (currentRow.length === 1 && !isLong && currentRow[0].length <= 14) {
+                                currentRow.push(item);
+                                rows.push({ key: `row-${rows.length}`, items: currentRow });
+                                currentRow = [];
+                              } else {
+                                rows.push({ key: `row-${rows.length}`, items: currentRow });
+                                currentRow = [item];
+                              }
+                            });
+                            if (currentRow.length > 0) {
+                              rows.push({ key: `row-${rows.length}`, items: currentRow });
+                            }
+                            return rows;
+                          };
+
+                          const baseRows = buildRows(baseItems);
+                          const seasoningRows = buildRows(seasoningItems);
+
+                          return (
+                            <View style={[styles.sectionCard, styles.ingredientsCard]}>
+                              {baseRows.length > 0 && (
+                                <View style={{ marginBottom: 16 }}>
+                                  <Text style={styles.sectionTitle}>[ 재료 ]</Text>
+                                  <View style={styles.ingredientSheet}>
+                                    {baseRows.map((row, rowIndex) => {
+                                      const left = row.items[0];
+                                      const right = row.items[1];
+                                      return (
+                                        <View
+                                          key={row.key}
+                                          style={[
+                                            styles.ingredientRow,
+                                            rowIndex === baseRows.length - 1 && seasoningRows.length === 0 && { borderBottomWidth: 0 },
+                                          ]}
+                                        >
+                                          <View style={styles.ingredientItem}>
+                                            <Text style={styles.ingredientLabel} numberOfLines={1} ellipsizeMode="tail">
+                                              {left?.label}
+                                            </Text>
+                                          </View>
+                                          <View style={styles.ingredientDivider} />
+                                          {right ? (
+                                            <View style={styles.ingredientItem}>
+                                              <Text style={styles.ingredientLabel} numberOfLines={1} ellipsizeMode="tail">
+                                                {right.label}
+                                              </Text>
+                                            </View>
+                                          ) : (
+                                            <View style={styles.ingredientItemPlaceholder} />
+                                          )}
+                                        </View>
+                                      );
+                                    })}
+                                  </View>
+                                </View>
+                              )}
+
+                              {seasoningRows.length > 0 && (
+                                <View>
+                                  <Text style={styles.sectionTitle}>[ 양념 & 조미료 ]</Text>
+                                  <View style={styles.ingredientSheet}>
+                                    {seasoningRows.map((row, rowIndex) => {
+                                      const left = row.items[0];
+                                      const right = row.items[1];
+                                      return (
+                                        <View
+                                          key={row.key}
+                                          style={[
+                                            styles.ingredientRow,
+                                            rowIndex === seasoningRows.length - 1 && { borderBottomWidth: 0 },
+                                          ]}
+                                        >
+                                          <View style={styles.ingredientItem}>
+                                            <Text style={styles.ingredientLabel} numberOfLines={1} ellipsizeMode="tail">
+                                              {left?.label}
+                                            </Text>
+                                          </View>
+                                          <View style={styles.ingredientDivider} />
+                                          {right ? (
+                                            <View style={styles.ingredientItem}>
+                                              <Text style={styles.ingredientLabel} numberOfLines={1} ellipsizeMode="tail">
+                                                {right.label}
+                                              </Text>
+                                            </View>
+                                          ) : (
+                                            <View style={styles.ingredientItemPlaceholder} />
+                                          )}
+                                        </View>
+                                      );
+                                    })}
+                                  </View>
+                                </View>
+                              )}
+                            </View>
+                          );
+                        })()}
+
+                        <TouchableOpacity style={styles.measureGuideBtn} onPress={() => setMeasureModalVisible(true)}>
+                          <Text style={styles.measureGuideBtnText}>기본 계량 가이드</Text>
+                        </TouchableOpacity>
+
+                        {sections.steps.length > 0 && (
+                          <View style={styles.sectionCard}>
+                            <Text style={styles.sectionTitle}>👨‍🍳 조리 순서</Text>
+                            {sections.steps.map((step, index) => (
+                              <View key={`step-${index}`} style={styles.stepRow}>
+                                <View style={styles.stepBadge}>
+                                  <Text style={styles.stepBadgeText}>{index + 1}</Text>
+                                </View>
+                                <Text style={styles.stepText}>{step}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+
+                        {sections.tips.length > 0 && (
+                          <View style={styles.tipCard}>
+                            <Text style={styles.tipTitle}>💡 요리 팁 (쿡덱스의 킥)</Text>
+                            {sections.tips.map((tip, index) => (
+                              <View key={`tip-${index}`} style={styles.tipRow}>
+                                <Text style={styles.tipText}>
+                                  {'\u2022 '}{tip}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </>
+                    ) : (
+                      <Markdown style={markdownStyles}>{textRecipeResult}</Markdown>
+                    )}
+
+                    <View style={{ height: 40 }} />
+                  </ScrollView>
+                );
+              })()}
             </View>
 
             {!isGeneratingRecipe && textRecipeResult && (
               <View style={styles.resultButtonsGrid}>
-                <TouchableOpacity style={[styles.gridBtn, {backgroundColor: '#FF6B6B', flex: 0.8}]} onPress={() => handleRecipeSaveAndShare(false)}><Text style={styles.gridBtnText}>저장</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.gridBtn, {backgroundColor: '#4CAF50', flex: 1.1}]} onPress={() => handleRecipeSaveAndShare(true)}><Text style={styles.gridBtnText}>광장에 공유</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.gridBtn, {backgroundColor: '#8E24AA', flex: 1.4}]} onPress={() => { setShowStyleModal(true); }}><Text style={styles.gridBtnText}>레시피 스타일 변경</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.resultIconButton} onPress={() => handleRecipeSaveAndShare(false)}>
+                  <View style={styles.resultIconCircle}>
+                    <Ionicons name="heart-outline" size={24} color={Colors.primary} />
+                  </View>
+                  <Text style={styles.resultIconLabel}>저장하기</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.resultIconButton} onPress={() => handleRecipeSaveAndShare(true)}>
+                  <View style={styles.resultIconCircle}>
+                    <Ionicons name="megaphone-outline" size={24} color={Colors.primary} />
+                  </View>
+                  <Text style={styles.resultIconLabel}>광장 공유</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.resultIconButton} onPress={() => { setShowStyleModal(true); }}>
+                  <View style={styles.resultIconCircle}>
+                    <Ionicons name="sparkles-outline" size={24} color={Colors.primary} />
+                  </View>
+                  <Text style={styles.resultIconLabel}>다시 제작</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.resultIconButton} onPress={openIngredientShopFromResult}>
+                  <View style={styles.resultIconCircle}>
+                    <Ionicons name="cart-outline" size={24} color={Colors.primary} />
+                  </View>
+                  <Text style={styles.resultIconLabel}>장보기</Text>
+                </TouchableOpacity>
               </View>
             )}
           </View>
@@ -857,6 +1782,25 @@ export default function CreateRecipeScreen() {
                 <TouchableOpacity style={styles.styleModalSave} onPress={requestNewStyle}><Text style={styles.styleModalBtnTextWhite}>추천받기 ✨</Text></TouchableOpacity>
               </View>
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={measureModalVisible} transparent animationType="fade" onRequestClose={() => setMeasureModalVisible(false)}>
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.measureModalContent}>
+            <Text style={styles.measureTitle}>쿡덱스 기본 계량표</Text>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.measureItem}>• 1큰술 (1T) = 15ml (어른 밥숟가락 1가득)</Text>
+              <Text style={styles.measureItem}>• 1작은술 (1t) = 5ml (티스푼 1가득)</Text>
+              <Text style={styles.measureItem}>• 1컵 (1Cup) = 200ml (일반 종이컵 가득)</Text>
+              <Text style={styles.measureItem}>• 1꼬집 = 엄지와 검지로 집은 양 (약 2g)</Text>
+              <Text style={styles.measureItem}>• 약간 = 2~3꼬집 정도의 양</Text>
+              <Text style={styles.measureItem}>• 한 줌 = 한 손에 가득 쥐어지는 양</Text>
+            </ScrollView>
+            <TouchableOpacity style={styles.measureCloseBtn} onPress={() => setMeasureModalVisible(false)}>
+              <Text style={styles.measureCloseBtnText}>확인했습니다</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1103,6 +2047,55 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 20,
   },
+  measureGuideBtn: {
+    backgroundColor: Colors.bgElevated,
+    marginHorizontal: 20,
+    marginVertical: 12,
+    paddingVertical: 10,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  measureGuideBtnText: {
+    color: Colors.textMain,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  measureModalContent: {
+    backgroundColor: Colors.bgModal,
+    borderRadius: Radius.lg,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    width: '90%',
+    alignSelf: 'center',
+  },
+  measureTitle: {
+    color: Colors.textMain,
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  measureItem: {
+    color: Colors.textMain,
+    fontSize: 14,
+    marginBottom: 10,
+    lineHeight: 22,
+  },
+  measureCloseBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  measureCloseBtnText: {
+    color: Colors.textInverse,
+    fontSize: 15,
+    fontWeight: '700',
+  },
   styleModalView: {
     backgroundColor: Colors.bgModal,
     borderRadius: Radius.lg,
@@ -1135,17 +2128,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textInverse,
     textAlign: 'center',
-    marginBottom: 20,
+    marginBottom: 12,
   },
   styleInput: {
     backgroundColor: '#FFF',
-    color: Colors.textInverse,
+    color: Colors.textMain,
     borderRadius: Radius.md,
     padding: 15,
     fontSize: 16,
     borderWidth: 1,
     borderColor: Colors.borderStrong,
-    marginBottom: 20,
+    marginBottom: 10,
   },
   generateBtn: {
     backgroundColor: Colors.primary,
@@ -1378,23 +2371,112 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
   },
+  sectionCard: {
+    backgroundColor: 'transparent',
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    marginBottom: 14,
+    borderWidth: 0,
+  },
+  ingredientsCard: {
+    paddingVertical: 14,
+  },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Colors.textMain,
+    marginBottom: 10,
+  },
+  ingredientSheet: {
+    marginTop: 4,
+    borderRadius: 0,
+    backgroundColor: 'transparent',
+    overflow: 'visible',
+    borderWidth: 0,
+    borderColor: 'transparent',
+    gap: 4,
+  },
+  ingredientRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    gap: 12,
+  },
+  ingredientItem: {
+    flex: 1,
+    minWidth: '45%',
+  },
+  ingredientItemPlaceholder: {
+    flex: 1,
+    minWidth: '45%',
+    opacity: 0,
+  },
+  ingredientLabel: {
+    fontSize: 13,
+    color: Colors.textMain,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  ingredientDivider: {
+    width: 1,
+    alignSelf: 'stretch',
+    backgroundColor: Colors.border,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+  },
+  stepBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  stepBadgeText: {
+    color: Colors.textInverse,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  stepText: {
+    flex: 1,
+    fontSize: 13,
+    color: Colors.textMain,
+    lineHeight: 20,
+  },
   resultButtonsGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 6,
-    marginTop: 15,
+    gap: 10,
+    marginTop: 18,
     paddingHorizontal: 20,
   },
-  gridBtn: {
-    paddingVertical: 14,
-    borderRadius: Radius.md,
+  resultIconButton: {
+    flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  gridBtnText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
+  resultIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: Colors.bgElevated,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 6,
+  },
+  resultIconLabel: {
+    fontSize: 12,
+    color: Colors.textMain,
+    fontWeight: '700',
   },
   commerceSection: {
     marginTop: 20,
@@ -1481,6 +2563,38 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 45,
   },
+  generatedTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: Colors.primary,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: 20,
+    marginTop: 4,
+    marginBottom: 14,
+  },
+  metaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.lg,
+    backgroundColor: Colors.bgElevated,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.soft,
+  },
+  metaChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textSub,
+  },
   ttsControls: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1514,6 +2628,78 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '900',
   },
+  shareKickImageWrap: {
+    width: '90%',
+    alignSelf: 'center',
+    aspectRatio: 3 / 2,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    backgroundColor: Colors.bgMuted,
+  },
+  shareKickImage: {
+    width: '100%',
+    height: '100%',
+  },
+  shareKickRetakeRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 8,
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  shareKickRetakeBtn: {
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: Colors.bgElevated,
+  },
+  shareKickRetakeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textMain,
+  },
+  shareKickTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: Colors.textMain,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  shareKickInput: {
+    width: '90%',
+    alignSelf: 'center',
+  },
+  ttsPill: {
+    backgroundColor: Colors.primarySoft,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  ttsPillText: {
+    color: Colors.primary,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  shareKickConfirmBtn: {
+    alignSelf: 'center',
+    marginTop: 8,
+    marginBottom: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primary,
+  },
+  shareKickConfirmText: {
+    color: Colors.textInverse,
+    fontSize: 14,
+    fontWeight: '900',
+  },
 
   styleModalTitle: {
     color: '#8E24AA',
@@ -1523,11 +2709,11 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   styleInputLabel: {
-    color: Colors.textInverse,
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginBottom: 8,
-    marginTop: 10,
+    color: Colors.textMain,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 4,
+    marginTop: 6,
   },
   styleTagsContainer: {
     flexDirection: 'row',

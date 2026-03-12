@@ -10,6 +10,7 @@ import { ActivityIndicator, Alert, Dimensions, Image, Keyboard, KeyboardAvoiding
 import Markdown from 'react-native-markdown-display';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth, db } from '../firebaseConfig';
+import { Colors, Radius, Shadows } from '../constants/design-tokens';
 
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
 const RECIPE_TYPES = ["메인 디쉬 🍛", "디저트 🍰", "음료/칵테일 🍹", "간단한 간식 🍟", "술안주 🍻", "샐러드/다이어트 🥗"];
@@ -30,6 +31,56 @@ const extractJSON = (rawText) => {
 
 // 🚨 [이슈 2 해결] 쓸데없는 루프를 버리고, 빠르고 정확한 단일 스위칭으로 개편
 const callGeminiAPI = async (systemPrompt, imageParts = []) => {
+  if (__DEV__) {
+    // 개발용 목업 응답
+    const promptText = typeof systemPrompt === 'string' ? systemPrompt : '';
+
+    // 1) 텍스트 비식재료 검사용
+    if (promptText.includes('"is_food": true') || promptText.includes('"is_food": false')) {
+      return { is_food: true };
+    }
+
+    // 2) 재료 → 3가지 테마 제안 (텍스트만)
+    if (promptText.includes('"invalid_items": ["식재료가 아닌 것"]') && promptText.includes('"curation_themes"')) {
+      const mockIngredients = (promptText.match(/\[식재료: (.+?)\]/) || [])[1]?.split(',').map(s => s.trim()) || ['양파', '대파'];
+      return {
+        invalid_items: [],
+        detected_ingredients: mockIngredients,
+        curation_themes: [
+          { theme_title: '불고기덮밥', match_reason: '재료와 찰떡', badge_icon: '🍚', ui_accent_color: '#F97316' },
+          { theme_title: '얼큰김치찌개', match_reason: '따뜻한 국물', badge_icon: '🍲', ui_accent_color: '#EF4444' },
+          { theme_title: '두부스테이크', match_reason: '가볍게 한 끼', badge_icon: '🥗', ui_accent_color: '#22C55E' },
+        ],
+      };
+    }
+
+    // 3) 스캔 이미지 → 재료 + 테마 제안
+    if (promptText.includes('"status": "SUCCESS 또는 NO_FOOD"')) {
+      return {
+        status: 'SUCCESS',
+        invalid_items: [],
+        detected_ingredients: ['양파', '대파', '두부'],
+        curation_themes: [
+          { theme_title: '두부조림', match_reason: '재료 활용', badge_icon: '🍲', ui_accent_color: '#F97316' },
+          { theme_title: '두부덮밥', match_reason: '한 그릇', badge_icon: '🍚', ui_accent_color: '#22C55E' },
+          { theme_title: '두부샐러드', match_reason: '가볍게', badge_icon: '🥗', ui_accent_color: '#3B82F6' },
+        ],
+      };
+    }
+
+    // 4) 최종 레시피 생성용
+    if (promptText.includes('"recipe_markdown"') && promptText.includes('"safety_warning"')) {
+      return {
+        safety_warning: null,
+        substitutions: [],
+        shopping_list: ['대파', '참기름', '깨소금'],
+        recipe_markdown: `# 불고기덮밥\n\n## 필요한 재료\n- 소고기 불고기용 | 150g\n- 양파 | 1/2개\n- 식용유 | 1큰술\n- 밥 | 1공기\n- 간장 | 1.5큰술\n- 설탕 | 1큰술\n- 다진 마늘 | 1작은술\n- 참기름 | 1작은술\n- 깨소금 | 약간\n- 대파 | 조금\n\n## 조리 순서\n1. 양파를 채 썰고, 대파는 송송 썰어 준비합니다.\n2. 달군 팬에 식용유를 두르고 소고기와 양파를 넣어 볶습니다.\n3. 고기가 반쯤 익으면 간장, 설탕, 다진 마늘을 넣어 불고기 양념을 입혀 볶아줍니다.\n4. 그릇에 뜨거운 밥을 담고 위에 완성된 불고기를 올립니다.\n5. 대파, 참기름, 깨소금을 뿌려 마무리합니다.\n\n## 요리 팁 (쿡덱스의 킥)\n- 양파를 충분히 볶아 단맛을 끌어내면 불고기 맛이 더 깊어집니다.\n- 고기를 너무 오래 익히면 질겨지니 양념이 배면 바로 불을 줄여 주세요.\n- 밥 대신 곤약밥이나 현미밥을 사용하면 포만감은 유지하면서 더 가볍게 즐길 수 있습니다.`,
+      };
+    }
+
+    // 기타 케이스는 단순 에러 방지용 기본 응답
+    return {};
+  }
   const modelsToTry = ['gemini-2.5-flash', 'gemini-2.5-pro'];
   let lastError = null;
 
@@ -119,6 +170,9 @@ export default function ScannerScreen() {
   // 🚨 [신규] 희망 요리 스타일 사전 질문 상태
   const [styleModalVisible, setStyleModalVisible] = useState(false);
   const [preferredStyle, setPreferredStyle] = useState("");
+  const [styleDishName, setStyleDishName] = useState("");
+  const [styleMethod, setStyleMethod] = useState("");
+  const [styleExtra, setStyleExtra] = useState("");
 
   useEffect(() => {
     const showSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', (e) => setKeyboardHeight(e.endCoordinates.height));
@@ -197,12 +251,35 @@ export default function ScannerScreen() {
   };
 
   if (!permission) return <View style={styles.container}/>;
-  if (!permission.granted) return (<View style={styles.container}><TouchableOpacity style={styles.analyzeButton} onPress={requestPermission}><Text style={styles.buttonText}>카메라 권한 허용</Text></TouchableOpacity></View>);
+  if (!permission.granted) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <TouchableOpacity style={styles.analyzeButton} onPress={requestPermission}>
+          <Text style={styles.buttonText}>카메라 권한 허용</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   const takePicture = async () => {
     if (cameraRef.current) {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
-      const manipResult = await manipulateAsync(photo.uri, [{ resize: { width: 800 } }], { compress: 0.7, format: SaveFormat.JPEG, base64: true });
+
+      // 중앙 가이드라인 비율에 맞춰 이미지의 중앙 영역만 크롭 후 리사이즈
+      const cropOriginX = photo.width * 0.1;   // left: 10%
+      const cropOriginY = photo.height * 0.26; // guide top ≈ 26%
+      const cropWidth = photo.width * 0.8;     // right: 10% 여백 → 80% 폭
+      const cropHeight = photo.height * 0.44;  // 상단/하단 여백 반영한 중앙 영역
+
+      const manipResult = await manipulateAsync(
+        photo.uri,
+        [
+          { crop: { originX: cropOriginX, originY: cropOriginY, width: cropWidth, height: cropHeight } },
+          { resize: { width: 800 } },
+        ],
+        { compress: 0.7, format: SaveFormat.JPEG, base64: true },
+      );
+
       setPhotos(prev => [...prev, { ...manipResult, label: "" }]);
     }
   };
@@ -231,8 +308,11 @@ export default function ScannerScreen() {
     }
 
     if (photos.length > 0 || manualIngredients.length > 0) {
-      setPreferredStyle(""); // 스타일 초기화
-      setStyleModalVisible(true); // 모달 띄우기
+      setPreferredStyle("");
+      setStyleDishName("");
+      setStyleMethod("");
+      setStyleExtra("");
+      setStyleModalVisible(true);
     } else {
       Alert.alert("알림", "재료를 추가하거나 사진을 찍어주세요.");
     }
@@ -690,10 +770,14 @@ export default function ScannerScreen() {
         
         {/* QA 모드 뱃지 삭제됨 */}
 
-        {/* 🚨 [신규] 남은 횟수 뱃지 */}
-        <View style={styles.limitBadge}><Text style={styles.limitBadgeText}>오늘 스캔: {scansLeft}회 남음</Text></View>
+        {/* 남은 횟수 뱃지 */}
+        <View style={styles.limitBadge}>
+          <Text style={styles.limitBadgeText}>오늘 스캔: {scansLeft}회 남음</Text>
+        </View>
 
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}><Text style={styles.backButtonText}>✕</Text></TouchableOpacity>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+          <Text style={styles.backButtonText}>✕</Text>
+        </TouchableOpacity>
         
         <View style={styles.topHUDContainer}>
           {manualIngredients.length > 0 && (
@@ -703,7 +787,7 @@ export default function ScannerScreen() {
           )}
           {photos.length > 0 && (
             <View>
-              <Text style={styles.trainingHintText}>💡 사진을 터치해 AI를 학습시켜주세요!</Text>
+              <Text style={styles.trainingHintText}>💡 사진을 터치해 식재료를 기입해주세요!</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.thumbnailScroll} contentContainerStyle={styles.thumbnailScrollContent}>
                 {photos.map((photo, idx) => (
                   <View key={idx}>
@@ -720,20 +804,44 @@ export default function ScannerScreen() {
           )}
         </View>
 
+        {/* 카메라 오버레이 + 하단 컨트롤 */}
         <View style={styles.overlay}>
+          {/* 중앙 코너 가이드라인 */}
+          <View style={styles.centerGuide}>
+            <View style={[styles.corner, styles.cornerTopLeft]} />
+            <View style={[styles.corner, styles.cornerTopRight]} />
+            <View style={[styles.corner, styles.cornerBottomLeft]} />
+            <View style={[styles.corner, styles.cornerBottomRight]} />
+          </View>
+
           <View style={styles.bottomMask}>
             <View style={styles.controlsArea}>
-                {(photos.length > 0 || manualIngredients.length > 0) && (
-                  <View style={styles.scannerActionRow}>
-                    <TouchableOpacity style={[styles.analyzeMultiButton, {backgroundColor: '#5A4E49'}]} onPress={() => setShowManualModal(true)}>
-                      <Text style={styles.buttonText}>✏️ 재료 추가</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.analyzeMultiButton} onPress={handleRecipeGeneration}>
-                      <Text style={styles.buttonText}>✨ AI 레시피</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                <TouchableOpacity style={styles.captureButton} onPress={() => checkLimitAndRun(takePicture)}><View style={styles.captureButtonInner} /></TouchableOpacity>
+              <View
+                style={[
+                  styles.scannerActionRow,
+                  photos.length === 0 && { opacity: 0 },
+                ]}
+                pointerEvents={photos.length > 0 ? 'auto' : 'none'}
+              >
+                <TouchableOpacity
+                  style={styles.analyzeMultiButton}
+                  onPress={() => setShowManualModal(true)}
+                >
+                  <Text style={styles.buttonText}>✏️ 재료 추가</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.analyzeMultiButton}
+                  onPress={handleRecipeGeneration}
+                >
+                  <Text style={styles.buttonText}>✨ AI 레시피</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                style={styles.captureButton}
+                onPress={() => checkLimitAndRun(takePicture)}
+              >
+                <View style={styles.captureButtonInner} />
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -845,31 +953,63 @@ export default function ScannerScreen() {
         </View>
       </Modal>
 
-      {/* 🚨 [신규] 희망 요리 스타일 사전 질문 모달 */}
+      {/* 🚨 [신규] 희망 요리 스타일 사전 질문 모달 (create-recipe와 동일한 구조) */}
       <Modal visible={styleModalVisible} transparent={true} animationType="fade" onRequestClose={() => setStyleModalVisible(false)}>
-        <View style={styles.modalOverlayCenter}>
-            <View style={[styles.bottomSheetContainer, {height: 'auto', maxHeight: '80%', paddingBottom: 30, borderTopLeftRadius: 20, borderTopRightRadius: 20, borderRadius: 20}]}>
-                <Text style={styles.styleModalTitle}>✨ 스캔된 재료로 어떤 요리를 원하세요?</Text>
-                <Text style={{textAlign: 'center', color: '#8C7A76', marginBottom: 20}}>AI에게 알려주시면 더 마음에 드는 메뉴를 추천해 드려요!</Text>
-                
-                <TextInput
-                    style={styles.customTextInput}
-                    placeholder="예: 얼큰한 국물, 간단한 볶음, 다이어트식 등"
-                    placeholderTextColor="#A89F9C"
-                    value={preferredStyle}
-                    onChangeText={setPreferredStyle}
-                />
-                
-                <View style={styles.styleModalButtons}>
-                    <TouchableOpacity style={styles.styleModalCancel} onPress={() => confirmStyleAndGenerate("")}>
-                        <Text style={styles.styleModalBtnText}>건너뛰고 추천받기</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.styleModalSave} onPress={() => confirmStyleAndGenerate(preferredStyle)}>
-                        <Text style={styles.styleModalBtnTextWhite}>이 스타일로 요리하기</Text>
-                    </TouchableOpacity>
-                </View>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlayCenter}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setStyleModalVisible(false)} />
+          <View style={[styles.bottomSheetContainer, { height: 'auto', maxHeight: '80%', paddingBottom: 24, borderRadius: 20 }]}>
+            <Text style={styles.styleModalTitle}>나만의 요리 스타일 추가!</Text>
+            <Text style={{ textAlign: 'center', color: '#8C7A76', marginBottom: 16 }}>원하시는 요리&조리 방법이 있나요?</Text>
+
+            <Text style={styles.styleInputLabel}>원하는 요리</Text>
+            <TextInput
+              style={styles.customTextInput}
+              placeholder="예: 라면, 비빔밥, 고등어 조림"
+              placeholderTextColor="#A89F9C"
+              value={styleDishName}
+              onChangeText={setStyleDishName}
+            />
+
+            <Text style={styles.styleInputLabel}>원하는 조리</Text>
+            <TextInput
+              style={styles.customTextInput}
+              placeholder="예: 볶음, 찌개, 튀김, 자작하게 끓이는 등"
+              placeholderTextColor="#A89F9C"
+              value={styleMethod}
+              onChangeText={setStyleMethod}
+            />
+
+            <Text style={styles.styleInputLabel}>스타일 추가</Text>
+            <TextInput
+              style={[styles.customTextInput, { height: 90, textAlignVertical: 'top' }]}
+              placeholder="예: 싱겁게 먹을 수 있는 미역국, 아이도 먹을 수 있게 매운맛은 거의 없이 등"
+              placeholderTextColor="#A89F9C"
+              value={styleExtra}
+              onChangeText={setStyleExtra}
+              multiline
+            />
+
+            <View style={styles.styleModalButtons}>
+              <TouchableOpacity style={styles.styleModalCancel} onPress={() => confirmStyleAndGenerate('')}>
+                <Text style={styles.styleModalBtnText}>건너뛰고 추천받기</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.styleModalSave}
+                onPress={() => {
+                  const parts: string[] = [];
+                  if (styleDishName.trim()) parts.push(`원하는 요리 이름: ${styleDishName.trim()}`);
+                  if (styleMethod.trim()) parts.push(`원하는 조리 방식: ${styleMethod.trim()}`);
+                  if (styleExtra.trim()) parts.push(`추가 설명: ${styleExtra.trim()}`);
+                  const combined = parts.join('\n');
+                  setPreferredStyle(combined);
+                  confirmStyleAndGenerate(combined);
+                }}
+              >
+                <Text style={styles.styleModalBtnTextWhite}>이 스타일로 요리하기</Text>
+              </TouchableOpacity>
             </View>
-        </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* 횟수 소진 팝업 */}
@@ -901,78 +1041,307 @@ export default function ScannerScreen() {
   );
 }
 
-const markdownStyles = StyleSheet.create({ body: { color: '#F9F5F3', fontSize: 15, lineHeight: 24 }, heading1: { color: '#FFB347', fontSize: 22, fontWeight: 'bold' }, blockquote: { backgroundColor: '#4A3F3A', borderLeftWidth: 4, borderLeftColor: '#FFB347', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5, marginVertical: 10 } });
+const markdownStyles = StyleSheet.create({
+  body: { color: Colors.textMain, fontSize: 15, lineHeight: 24 },
+  heading1: { color: Colors.primary, fontSize: 22, fontWeight: 'bold' },
+  blockquote: {
+    backgroundColor: Colors.primarySoft,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.success,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    marginVertical: 10,
+  },
+});
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#2A2421' },
+  container: { flex: 1, backgroundColor: Colors.bgMain },
   camera: { flex: 1 },
-  limitBadge: { position: 'absolute', top: 50, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, zIndex: 10 },
-  limitBadgeText: { color: '#FF8C00', fontWeight: 'bold', fontSize: 13 },
-  backButton: { position: 'absolute', top: 50, left: 20, backgroundColor: 'rgba(0,0,0,0.5)', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', zIndex: 10 },
-  backButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-  topHUDContainer: { position: 'absolute', top: 100, left: 20, right: 20, zIndex: 5 },
+  limitBadge: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    zIndex: 10,
+  },
+  limitBadgeText: { color: Colors.primarySoft, fontWeight: '600', fontSize: 12 },
+  backButton: {
+    position: 'absolute',
+    top: 40,
+    left: 20,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  backButtonText: { color: Colors.textInverse, fontSize: 18, fontWeight: 'bold' },
+  topHUDContainer: { position: 'absolute', top: 90, left: 20, right: 20, zIndex: 5 },
   addedManualIngredientsBox: { backgroundColor: 'rgba(255, 140, 0, 0.9)', padding: 10, borderRadius: 10, alignSelf: 'flex-start', marginBottom: 10 },
-  trainingHintText: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold', marginBottom: 10, textShadowColor: '#000', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 3 },
+  trainingHintText: {
+    color: '#FFFDF9',
+    fontSize: 13,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    textShadowColor: '#000',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
   thumbnailScroll: { maxHeight: 80 },
   thumbnailScrollContent: { gap: 10 },
-  thumbnailImage: { width: 60, height: 60, borderRadius: 10, borderWidth: 2, borderColor: '#FF8C00' },
-  deletePhotoBtn: { position: 'absolute', top: -5, right: -5, backgroundColor: 'red', width: 20, height: 20, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  thumbnailImage: { width: 60, height: 60, borderRadius: 10, borderWidth: 2, borderColor: Colors.primary },
+  deletePhotoBtn: {
+    position: 'absolute',
+    top: 0,
+    right: -5,
+    backgroundColor: 'red',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   deletePhotoBtnText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
   overlay: { flex: 1, justifyContent: 'flex-end' },
-  bottomMask: { backgroundColor: 'rgba(42, 36, 33, 0.8)', paddingBottom: 40, paddingTop: 20, borderTopLeftRadius: 30, borderTopRightRadius: 30 },
+  centerGuide: {
+    position: 'absolute',
+    top: '26%',
+    left: '10%',
+    right: '10%',
+    bottom: '36%',
+    justifyContent: 'space-between',
+    alignItems: 'stretch',
+  },
+  corner: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderColor: Colors.primary,
+  },
+  cornerTopLeft: {
+    top: 0,
+    left: 0,
+    borderTopWidth: 2,
+    borderLeftWidth: 2,
+  },
+  cornerTopRight: {
+    top: 0,
+    right: 0,
+    borderTopWidth: 2,
+    borderRightWidth: 2,
+  },
+  cornerBottomLeft: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 2,
+    borderLeftWidth: 2,
+  },
+  cornerBottomRight: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 2,
+    borderRightWidth: 2,
+  },
+  bottomMask: {
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    paddingBottom: 48,
+    paddingTop: 16,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+  },
   controlsArea: { alignItems: 'center', gap: 20 },
   scannerActionRow: { flexDirection: 'row', gap: 15, marginBottom: 10 },
-  analyzeMultiButton: { backgroundColor: '#FF8C00', paddingVertical: 12, paddingHorizontal: 25, borderRadius: 20 },
-  buttonText: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
-  captureButton: { width: 70, height: 70, borderRadius: 35, backgroundColor: '#A89F9C', justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#FFFDF9' },
-  captureButtonInner: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#FFFDF9' },
-  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
-  bottomSheetContainer: { backgroundColor: '#2A2421', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
-  dragHandle: { width: 40, height: 5, backgroundColor: '#4A3F3A', borderRadius: 3, alignSelf: 'center', marginBottom: 15 },
+  analyzeMultiButton: {
+    backgroundColor: Colors.primarySoft,
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+    borderRadius: Radius.pill,
+  },
+  buttonText: { color: Colors.primary, fontSize: 14, fontWeight: '800', textAlign: 'center' },
+  captureButton: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: Colors.textInverse,
+    ...Shadows.glassTight,
+  },
+  captureButtonInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.textInverse,
+  },
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: Colors.overlayDark },
+  bottomSheetContainer: {
+    backgroundColor: Colors.bgModal,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: 20,
+    ...Shadows.glassDiffused,
+  },
+  dragHandle: {
+    width: 40,
+    height: 5,
+    backgroundColor: Colors.borderStrong,
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginBottom: 15,
+  },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   modalTitleText: { color: '#FF8C00', fontSize: 18, fontWeight: 'bold' },
   closeButton: { padding: 5 },
   closeButtonText: { color: '#A89F9C', fontSize: 14, fontWeight: 'bold' },
   sectionLabel: { color: '#A89F9C', fontSize: 13, fontWeight: 'bold', marginBottom: 10 },
   quickTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
-  quickTag: { backgroundColor: '#3A322F', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 15, borderWidth: 1, borderColor: '#4A3F3A' },
-  quickTagText: { color: '#FFFDF9', fontSize: 13 },
-  selectedTagsContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20, padding: 15, backgroundColor: '#3A322F', borderRadius: 12 },
-  tagBadgeActive: { backgroundColor: '#FF8C00', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15 },
-  tagTextActive: { color: '#000', fontSize: 13, fontWeight: 'bold' },
+  quickTag: {
+    backgroundColor: Colors.bgMuted,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  quickTagText: { color: Colors.textMain, fontSize: 13 },
+  selectedTagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 20,
+    padding: 15,
+    backgroundColor: Colors.bgMuted,
+    borderRadius: Radius.md,
+  },
+  tagBadgeActive: {
+    backgroundColor: Colors.primarySoft,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Radius.pill,
+  },
+  tagTextActive: { color: Colors.primary, fontSize: 13, fontWeight: 'bold' },
   inlineInputRow: { flexDirection: 'row', gap: 10, marginBottom: 15 },
-  inlineTextInput: { flex: 1, backgroundColor: '#3A322F', color: '#FFFDF9', borderRadius: 12, paddingHorizontal: 15, paddingVertical: 12, borderWidth: 1, borderColor: '#4A3F3A' },
-  inlineAddBtn: { backgroundColor: '#5A4E49', justifyContent: 'center', paddingHorizontal: 20, borderRadius: 12 },
-  inlineAddBtnText: { color: '#FFFDF9', fontWeight: 'bold' },
+  inlineTextInput: {
+    flex: 1,
+    backgroundColor: Colors.bgMuted,
+    color: Colors.textMain,
+    borderRadius: Radius.md,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  inlineAddBtn: {
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    borderRadius: Radius.md,
+  },
+  inlineAddBtnText: { color: Colors.textInverse, fontWeight: 'bold' },
   autocompleteContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  tagBadge: { backgroundColor: '#4A3F3A', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 15 },
-  tagText: { color: '#FFFDF9', fontSize: 13 },
-  customAddBadge: { backgroundColor: '#5A4E49', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 15 },
-  customAddText: { color: '#FFB347', fontSize: 13, fontWeight: 'bold' },
-  modalOverlayCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
-  trainingModalContent: { backgroundColor: '#2A2421', borderRadius: 20, padding: 20, width: '100%', borderWidth: 1, borderColor: '#FF8C00' },
-  styleModalTitle: { color: '#FFFDF9', fontSize: 20, fontWeight: '900', marginBottom: 15 },
-  trainingGuideText: { color: '#A89F9C', fontSize: 13, marginBottom: 15 },
+  tagBadge: {
+    backgroundColor: Colors.bgMuted,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: Radius.pill,
+  },
+  tagText: { color: Colors.textMain, fontSize: 13 },
+  customAddBadge: {
+    backgroundColor: Colors.primarySoft,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: Radius.pill,
+  },
+  customAddText: { color: Colors.primary, fontSize: 13, fontWeight: 'bold' },
+  modalOverlayCenter: {
+    flex: 1,
+    backgroundColor: Colors.overlayDark,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  trainingModalContent: {
+    backgroundColor: Colors.bgModal,
+    borderRadius: Radius.lg,
+    padding: 20,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  styleModalTitle: { color: Colors.textMain, fontSize: 20, fontWeight: '900', marginBottom: 15 },
+  trainingGuideText: { color: Colors.textSub, fontSize: 13, marginBottom: 15 },
   trainingImagePreview: { width: '100%', height: 200, borderRadius: 15, marginBottom: 15, resizeMode: 'cover' },
   styleInputLabel: { color: '#FFB347', fontSize: 14, fontWeight: 'bold', marginBottom: 10 },
-  customTextInput: { backgroundColor: '#3A322F', color: '#FFFDF9', borderRadius: 12, padding: 15, borderWidth: 1, borderColor: '#4A3F3A', marginBottom: 15 },
-  legalWarningBox: { backgroundColor: '#4A3F3A', padding: 15, borderRadius: 12, borderLeftWidth: 4, borderLeftColor: '#E53935' },
-  legalWarningText: { color: '#FFFDF9', fontSize: 12, lineHeight: 18 },
-  styleModalSave: { backgroundColor: '#FF8C00', paddingVertical: 15, borderRadius: 12, alignItems: 'center' },
-  styleModalBtnTextWhite: { color: '#000', fontSize: 16, fontWeight: 'bold' },
+  customTextInput: {
+    backgroundColor: Colors.bgMuted,
+    color: Colors.textMain,
+    borderRadius: Radius.md,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 15,
+  },
+  legalWarningBox: {
+    backgroundColor: Colors.bgMuted,
+    padding: 15,
+    borderRadius: Radius.md,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.danger,
+  },
+  legalWarningText: { color: Colors.textMain, fontSize: 12, lineHeight: 18 },
+  styleModalSave: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 15,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+  },
+  styleModalBtnTextWhite: { color: Colors.textInverse, fontSize: 16, fontWeight: 'bold' },
   styleModalButtons: { flexDirection: 'row', gap: 10, marginTop: 10 },
-  styleModalCancel: { flex: 1, backgroundColor: '#4A3F3A', paddingVertical: 15, borderRadius: 12, alignItems: 'center' },
-  styleModalBtnText: { color: '#FFFDF9', fontSize: 15, fontWeight: 'bold' },
-  adModalContent: { backgroundColor: '#2A2421', borderRadius: 24, padding: 25, alignItems: 'center', borderWidth: 1, borderColor: '#4A3F3A' },
-  adTitle: { color: '#FF8C00', fontSize: 22, fontWeight: 'bold', marginBottom: 10 },
-  adSub: { color: '#FFFDF9', fontSize: 14, textAlign: 'center', marginBottom: 25 },
-  watchAdBtn: { backgroundColor: '#FF8C00', paddingVertical: 15, paddingHorizontal: 20, borderRadius: 12, width: '100%', alignItems: 'center', marginBottom: 10 },
-  watchAdBtnText: { color: '#000', fontSize: 15, fontWeight: 'bold' },
+  styleModalCancel: {
+    flex: 1,
+    backgroundColor: Colors.bgMuted,
+    paddingVertical: 15,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+  },
+  styleModalBtnText: { color: Colors.textMain, fontSize: 15, fontWeight: 'bold' },
+  adModalContent: {
+    backgroundColor: Colors.bgModal,
+    borderRadius: Radius.xl,
+    padding: 25,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  adTitle: { color: Colors.textMain, fontSize: 20, fontWeight: 'bold', marginBottom: 10 },
+  adSub: { color: Colors.textSub, fontSize: 13, textAlign: 'center', marginBottom: 22 },
+  watchAdBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: Radius.lg,
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  watchAdBtnText: { color: Colors.textInverse, fontSize: 15, fontWeight: 'bold' },
   closeAdBtn: { paddingVertical: 15 },
-  closeAdBtnText: { color: '#A89F9C', fontSize: 14, fontWeight: 'bold' },
-  mockAdContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
-  mockAdTitle: { color: '#FFFDF9', fontSize: 22, fontWeight: 'bold', marginBottom: 20 },
-  mockAdTimer: { color: '#FF8C00', fontSize: 40, fontWeight: '900' },
+  closeAdBtnText: { color: Colors.textSub, fontSize: 14, fontWeight: 'bold' },
+  mockAdContainer: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mockAdTitle: { color: Colors.textMain, fontSize: 20, fontWeight: 'bold', marginBottom: 18 },
+  mockAdTimer: { color: Colors.primary, fontSize: 32, fontWeight: '900' },
   resultBg: { flex: 1, backgroundColor: '#2A2421' },
   resultContainer: { flex: 1, padding: 20, paddingTop: 50 },
   loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center' },

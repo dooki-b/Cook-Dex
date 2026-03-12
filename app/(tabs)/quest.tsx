@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Dimensions, Modal, PanResponder, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { db } from '../../firebaseConfig';
+import { Colors, Radius, Shadows } from '../../constants/design-tokens';
 
 const INITIAL_MISSIONS = [
   { id: 'm1', text: '오늘의 주방 입장 (출석)', exp: 10, isCompleted: true, isClaimed: false },
@@ -182,14 +183,19 @@ export default function QuestScreen() {
     await AsyncStorage.setItem('cookdex_equipped_title', title);
   };
 
-  if (isLoading) return <View style={[styles.container, {justifyContent: 'center'}]}><ActivityIndicator size="large" color="#FF8C00" /></View>;
+  if (isLoading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+      </View>
+    );
+  }
 
   const currentLevelInfo = calculateLevel(userExp);
   const expProgress = currentLevelInfo.level === 'MAX' ? 100 : (userExp / currentLevelInfo.nextExp) * 100;
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* 🔙 헤더 (홈에서 퀵메뉴로 들어왔을 때를 위한 뒤로가기) */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.push('/(tabs)')} style={styles.backBtn}>
           <Text style={styles.backBtnText}>뒤로</Text>
@@ -200,7 +206,6 @@ export default function QuestScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         
-        {/* 레벨 및 칭호 카드 */}
         <View style={styles.profileCard}>
           <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start'}}>
             <View>
@@ -213,7 +218,10 @@ export default function QuestScreen() {
           </View>
           
           <View style={styles.levelHeader}>
-            <Text style={styles.levelTitle}>Lv.{currentLevelInfo.level} {isExpBuffActive && <Text style={{color: '#E53935'}}>(EXP 2배 버프 중)</Text>}</Text>
+            <Text style={styles.levelTitle}>
+              Lv.{currentLevelInfo.level}{' '}
+              {isExpBuffActive && <Text style={styles.levelBuffText}>(EXP 2배 버프 중)</Text>}
+            </Text>
             <Text style={styles.expText}>{userExp} / {currentLevelInfo.level === 'MAX' ? 'MAX' : currentLevelInfo.nextExp} EXP</Text>
           </View>
           <View style={styles.progressBarBg}><View style={[styles.progressBarFill, { width: `${expProgress}%` }]} /></View>
@@ -237,7 +245,6 @@ export default function QuestScreen() {
           </View>
         </TouchableOpacity>
 
-        {/* 광고 버프 발동 버튼 */}
         {!isExpBuffActive && (
           <TouchableOpacity style={styles.buffAdBtn} onPress={playBuffAd}>
             <Text style={styles.buffAdTitle}>30초 스폰서 광고 시청하기</Text>
@@ -245,7 +252,6 @@ export default function QuestScreen() {
           </TouchableOpacity>
         )}
 
-        {/* 일일 미션 시스템 */}
         <View style={styles.settingSection}>
           <Text style={styles.sectionTitle}>📋 오늘의 셰프 미션</Text>
           <Text style={styles.sectionSub}>매일 자정에 초기화됩니다. 달성하고 보상을 챙기세요!</Text>
@@ -269,28 +275,58 @@ export default function QuestScreen() {
         </View>
 
         {/* 스와이프 데이터 검증 */}
-        <View style={{ marginTop: 30, backgroundColor: '#3A322F', padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#4A3F3A', minHeight: 250, alignItems: 'center' }}>
-          <Text style={{ color: '#FFB347', fontSize: 16, fontWeight: 'bold', marginBottom: 15 }}>스와이프 검증 (우측 O / 좌측 X)</Text>
-          
+        <View style={styles.voteSection}>
+          <Text style={styles.voteSectionTitle}>식재료 검증하고 EXP 받기!</Text>
+
           {votingData.length > 0 ? (
             <Animated.View
               {...panResponder.panHandlers}
-              style={{ transform: [{ translateX: swipePosition.x }, { translateY: swipePosition.y }, { rotate }], backgroundColor: '#2A2421', padding: 30, borderRadius: 20, width: '100%', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 }}
+              style={[
+                styles.voteCard,
+                {
+                  transform: [
+                    { translateX: swipePosition.x },
+                    { translateY: swipePosition.y },
+                    { rotate },
+                  ],
+                },
+              ]}
             >
-              <Text style={{ color: '#FFFDF9', fontSize: 20, fontWeight: 'bold' }}>이 항목이 '{votingData[0].proposedName}'입니까?</Text>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: 30 }}>
-                <Text style={{ color: '#F44336', fontWeight: '900', fontSize: 18 }}>X 아님</Text>
-                <Text style={{ color: '#4CAF50', fontWeight: '900', fontSize: 18 }}>O 맞음</Text>
-              </View>
+              <Text style={styles.voteQuestion}>
+                이 항목이 '{votingData[0].proposedName}'입니까?
+              </Text>
+              <Text style={styles.voteHint}>카드를 좌우로 스와이프하거나 아래 버튼을 눌러 주세요.</Text>
             </Animated.View>
           ) : (
-            <Text style={{ color: '#8C7A76', textAlign: 'center', paddingVertical: 20 }}>현재 검증 대기 중인 데이터가 없습니다.</Text>
+            <View style={styles.voteEmptyBox}>
+              <Text style={styles.voteEmptyEmoji}>🧺</Text>
+              <Text style={styles.voteEmptyText}>현재 검증 대기 중인 데이터가 없습니다.</Text>
+              <Text style={styles.voteEmptySub}>잠시 후 새로운 검증 요청이 도착할 거예요.</Text>
+            </View>
+          )}
+
+          {votingData.length > 0 && (
+            <View style={styles.voteActionsRow}>
+              <TouchableOpacity
+                style={styles.voteBtnNo}
+                onPress={() => handleSwipeComplete(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.voteBtnNoText}>X 아니에요</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.voteBtnYes}
+                onPress={() => handleSwipeComplete(true)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.voteBtnYesText}>O 맞아요</Text>
+              </TouchableOpacity>
+            </View>
           )}
         </View>
 
       </ScrollView>
 
-      {/* 칭호 변경 모달 */}
       <Modal visible={titleModalVisible} transparent={true} animationType="slide" onRequestClose={() => setTitleModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -309,12 +345,11 @@ export default function QuestScreen() {
         </View>
       </Modal>
 
-      {/* 가상 광고 모달 */}
       <Modal visible={mockAdPlaying} transparent={false} animationType="slide">
         <View style={styles.mockAdContainer}>
           <Text style={styles.mockAdTitle}>스폰서 광고 재생 중...</Text>
           <Text style={styles.mockAdTimer}>{adCountdown}초 후 버프가 발동됩니다</Text>
-          <ActivityIndicator size="large" color="#FF8C00" style={{marginTop: 30}} />
+          <ActivityIndicator size="large" color={Colors.primary} style={{ marginTop: 30 }} />
         </View>
       </Modal>
 
@@ -323,57 +358,405 @@ export default function QuestScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#2A2421' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: Platform.OS === 'android' ? 40 : 20, paddingBottom: 15, backgroundColor: '#2A2421' },
-  backBtn: { backgroundColor: '#4A3F3A', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12 },
-  backBtnText: { color: '#E8D5D0', fontSize: 13, fontWeight: 'bold' },
-  pageTitle: { fontSize: 20, fontWeight: '900', color: '#FFFDF9' },
-  scrollContent: { padding: 20, paddingBottom: 100 },
-  
-  profileCard: { backgroundColor: '#3A322F', borderRadius: 20, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: '#4A3F3A' },
-  equippedTitleBadge: { backgroundColor: '#FF8C00', alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, marginBottom: 8, fontSize: 12, fontWeight: 'bold', color: '#000' },
-  userName: { fontSize: 22, fontWeight: 'bold', color: '#FFFDF9', marginBottom: 15 },
-  changeTitleBtn: { backgroundColor: '#4A3F3A', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: '#5A4E49' },
-  changeTitleBtnText: { color: '#FFB347', fontSize: 12, fontWeight: 'bold' },
-  levelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 10 },
-  levelTitle: { fontSize: 16, fontWeight: 'bold', color: '#FF8C00' },
-  expText: { fontSize: 13, fontWeight: 'bold', color: '#A89F9C' },
-  progressBarBg: { width: '100%', height: 12, backgroundColor: '#4A3F3A', borderRadius: 6, overflow: 'hidden' },
-  progressBarFill: { height: '100%', backgroundColor: '#FF8C00', borderRadius: 6 },
+  container: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? 32 : 16,
+    paddingBottom: 12,
+    backgroundColor: Colors.bgMain,
+  },
+  backBtn: {
+    backgroundColor: Colors.bgElevated,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  backBtnText: {
+    color: Colors.textSub,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  pageTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: Colors.textMain,
+  },
+  scrollContent: {
+    padding: 20,
+    paddingBottom: 100,
+  },
 
-  buffAdBtn: { backgroundColor: '#3F2860', padding: 20, borderRadius: 20, marginBottom: 25, borderWidth: 1, borderColor: '#9C27B0', alignItems: 'center' },
-  buffAdTitle: { color: '#E1BEE7', fontSize: 16, fontWeight: '900', marginBottom: 5 },
-  buffAdSub: { color: '#CE93D8', fontSize: 12 },
+  profileCard: {
+    backgroundColor: Colors.bgElevated,
+    borderRadius: Radius.xl,
+    padding: 20,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.soft,
+  },
+  equippedTitleBadge: {
+    backgroundColor: Colors.primarySoft,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    marginBottom: 8,
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  userName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.textMain,
+    marginBottom: 12,
+  },
+  changeTitleBtn: {
+    backgroundColor: Colors.bgMuted,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  changeTitleBtnText: {
+    color: Colors.textMain,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  levelHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginBottom: 8,
+  },
+  levelTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: Colors.textMain,
+  },
+  levelBuffText: {
+    color: Colors.danger,
+    fontSize: 12,
+    fontWeight: '700',
+  } as any,
+  expText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textSub,
+  },
+  progressBarBg: {
+    width: '100%',
+    height: 10,
+    backgroundColor: Colors.bgMuted,
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: Colors.primary,
+    borderRadius: 6,
+  },
 
-  settingSection: { backgroundColor: '#3A322F', borderRadius: 20, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: '#4A3F3A' },
-  sectionTitle: { fontSize: 16, fontWeight: '900', color: '#FFFDF9', marginBottom: 5 },
-  sectionSub: { fontSize: 12, color: '#A89F9C', marginBottom: 15 },
-  missionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#2A2421', padding: 15, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#4A3F3A' },
-  missionText: { color: '#FFFDF9', fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
-  missionExp: { color: '#FFB347', fontSize: 12, fontWeight: 'bold' },
-  missionBtnClaim: { backgroundColor: '#4CAF50', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 12 },
-  missionBtnClaimText: { color: '#fff', fontWeight: 'bold', fontSize: 13 },
-  missionBtnLock: { backgroundColor: '#4A3F3A', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 12 },
-  missionBtnLockText: { color: '#A89F9C', fontWeight: 'bold', fontSize: 13 },
-  missionBtnDone: { backgroundColor: 'transparent', paddingHorizontal: 15, paddingVertical: 10 },
-  missionBtnDoneText: { color: '#8C7A76', fontWeight: 'bold', fontSize: 13 },
+  buffAdBtn: {
+    backgroundColor: Colors.primarySoft,
+    padding: 18,
+    borderRadius: Radius.lg,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  buffAdTitle: {
+    color: Colors.primary,
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  buffAdSub: {
+    color: Colors.textSub,
+    fontSize: 12,
+  },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  modalContent: { backgroundColor: '#2A2421', borderRadius: 24, padding: 25, borderWidth: 1, borderColor: '#FF8C00', width: '100%', alignItems: 'center' },
-  modalTitle: { fontSize: 22, fontWeight: '900', color: '#FF8C00', marginBottom: 10 },
-  modalSub: { fontSize: 14, color: '#FFFDF9', marginBottom: 20 },
-  titleOption: { width: '100%', padding: 15, borderBottomWidth: 1, borderBottomColor: '#4A3F3A', borderRadius: 10, marginBottom: 5 },
-  titleOptionText: { color: '#FFFDF9', fontSize: 16, textAlign: 'center' },
-  closeModalBtn: { marginTop: 20, backgroundColor: '#4A3F3A', paddingVertical: 12, paddingHorizontal: 30, borderRadius: 15 },
-  closeModalBtnText: { color: '#FFFDF9', fontWeight: 'bold' },
-  mockAdContainer: { flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
-  mockAdTitle: { color: '#FFFDF9', fontSize: 22, fontWeight: 'bold', marginBottom: 20 },
-  mockAdTimer: { color: '#FF8C00', fontSize: 40, fontWeight: '900' },
+  settingSection: {
+    backgroundColor: Colors.bgElevated,
+    borderRadius: Radius.xl,
+    padding: 20,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: Colors.textMain,
+    marginBottom: 4,
+  },
+  sectionSub: {
+    fontSize: 12,
+    color: Colors.textSub,
+    marginBottom: 14,
+  },
+  missionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: Colors.bgMuted,
+    padding: 14,
+    borderRadius: Radius.md,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  missionText: {
+    color: Colors.textMain,
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  missionExp: {
+    color: Colors.primary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  missionBtnClaim: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
+  },
+  missionBtnClaimText: {
+    color: Colors.textInverse,
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  missionBtnLock: {
+    backgroundColor: Colors.bgElevated,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: Radius.md,
+  },
+  missionBtnLockText: {
+    color: Colors.textSub,
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  missionBtnDone: {
+    backgroundColor: 'transparent',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  missionBtnDoneText: {
+    color: Colors.textSub,
+    fontWeight: '700',
+    fontSize: 12,
+  },
 
-  rouletteMegaBtn: { backgroundColor: '#FF8C00', borderRadius: 20, padding: 20, marginBottom: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', shadowColor: '#FF8C00', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8, elevation: 6 },
-  rouletteTextLayout: { flex: 1, paddingRight: 10 },
-  rouletteMegaTitle: { fontSize: 18, fontWeight: '900', color: '#000', marginBottom: 5 },
-  rouletteMegaSub: { fontSize: 12, fontWeight: 'bold', color: '#3A322F' },
-  rouletteGoBtn: { backgroundColor: '#000', width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },
-  rouletteGoText: { color: '#FF8C00', fontSize: 16, fontWeight: '900' },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: Colors.overlayDark,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: Colors.bgModal,
+    borderRadius: Radius.xl,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    width: '100%',
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: Colors.textMain,
+    marginBottom: 6,
+  },
+  modalSub: {
+    fontSize: 13,
+    color: Colors.textSub,
+    marginBottom: 18,
+  },
+  titleOption: {
+    width: '100%',
+    padding: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    borderRadius: Radius.md,
+    marginBottom: 6,
+  },
+  titleOptionText: {
+    color: Colors.textMain,
+    fontSize: 15,
+    textAlign: 'center',
+  },
+  closeModalBtn: {
+    marginTop: 18,
+    backgroundColor: Colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 28,
+    borderRadius: Radius.lg,
+  },
+  closeModalBtnText: {
+    color: Colors.textInverse,
+    fontWeight: '800',
+  },
+  mockAdContainer: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mockAdTitle: {
+    color: Colors.textMain,
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 16,
+  },
+  mockAdTimer: {
+    color: Colors.primary,
+    fontSize: 32,
+    fontWeight: '900',
+  },
+
+  rouletteMegaBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: Radius.lg,
+    padding: 18,
+    marginBottom: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    ...Shadows.glow,
+  },
+  rouletteTextLayout: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  rouletteMegaTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: Colors.textInverse,
+    marginBottom: 4,
+  },
+  rouletteMegaSub: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textInverse,
+  },
+  rouletteGoBtn: {
+    backgroundColor: Colors.bgElevated,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  rouletteGoText: {
+    color: Colors.primary,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+
+  // 스와이프 투표
+  voteSection: {
+    marginTop: 26,
+    backgroundColor: Colors.bgElevated,
+    padding: 20,
+    borderRadius: Radius.xl,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    ...Shadows.soft,
+  },
+  voteSectionTitle: {
+    color: Colors.textMain,
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 16,
+  },
+  voteCard: {
+    backgroundColor: Colors.bgElevated,
+    padding: 24,
+    borderRadius: Radius.xl,
+    width: '100%',
+    alignItems: 'center',
+    ...Shadows.glassDiffused,
+  },
+  voteQuestion: {
+    color: Colors.textMain,
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  voteHint: {
+    marginTop: 12,
+    fontSize: 12,
+    color: Colors.textSub,
+    textAlign: 'center',
+  },
+  voteEmptyBox: {
+    alignItems: 'center',
+    paddingVertical: 18,
+  },
+  voteEmptyEmoji: {
+    fontSize: 36,
+    marginBottom: 8,
+  },
+  voteEmptyText: {
+    color: Colors.textMain,
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  voteEmptySub: {
+    color: Colors.textSub,
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  voteActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 18,
+    width: '100%',
+  },
+  voteBtnNo: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginRight: 8,
+    backgroundColor: Colors.bgMuted,
+    alignItems: 'center',
+  },
+  voteBtnNoText: {
+    color: Colors.textSub,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  voteBtnYes: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primary,
+    marginLeft: 8,
+    alignItems: 'center',
+  },
+  voteBtnYesText: {
+    color: Colors.textInverse,
+    fontSize: 13,
+    fontWeight: '800',
+  },
 });

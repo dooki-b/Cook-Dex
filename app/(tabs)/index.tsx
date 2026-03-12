@@ -678,6 +678,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     justifyContent: 'center',
     marginBottom: 24,
+    borderWidth: 0,
+    borderColor: 'transparent',
   },
   searchPlaceholder: {
     fontSize: 15,

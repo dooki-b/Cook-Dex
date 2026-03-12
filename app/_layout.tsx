@@ -42,7 +42,7 @@ export default function RootLayout() {
       router.replace('/login');
     } 
     // 🚨 치명적 에러 해결: 스캐너(scanner) 화면일 때는 홈으로 튕겨내지 않도록 예외 처리 추가!!
-    else if (user && segments[0] !== '(tabs)' && segments[0] !== 'scanner' && segments[0] !== 'create-recipe' && segments[0] !== 'tutorial' && segments[0] !== 'benefits' && segments[0] !== 'search') {
+    else if (user && segments[0] !== '(tabs)' && segments[0] !== 'scanner' && segments[0] !== 'create-recipe' && segments[0] !== 'tutorial' && segments[0] !== 'benefits' && segments[0] !== 'search' && segments[0] !== 'recipe-detail' && segments[0] !== 'plaza-hof' && segments[0] !== 'plaza-ranking' && segments[0] !== 'categories') {
       router.replace('/(tabs)');
     }
   }, [user, isInitializing, segments]);
@@ -82,6 +82,10 @@ export default function RootLayout() {
       <Stack.Screen name="tutorial" options={{ headerShown: false, gestureEnabled: false }} />
       <Stack.Screen name="benefits" options={{ headerShown: false, presentation: 'modal' }} />
       <Stack.Screen name="search" />
+      <Stack.Screen name="recipe-detail" />
+      <Stack.Screen name="plaza-hof" />
+      <Stack.Screen name="plaza-ranking" />
+      <Stack.Screen name="categories" />
     </Stack>
   );
 }

@@ -2,25 +2,47 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Speech from 'expo-speech';
 import { collection, doc, getDocs, increment, limit, orderBy, query, updateDoc, where } from 'firebase/firestore';
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Linking, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Linking, Modal, Platform, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 import { db } from '../../firebaseConfig';
+import { Colors, Radius, Shadows } from '../../constants/design-tokens';
 
 const DAILY_PLAZA_LIMIT = 5;
 
+type PlazaRecipe = {
+  id: string;
+  content?: string;
+  authorName?: string;
+  createdAt?: string;
+  likes?: number;
+  comments?: string[];
+  recipeKey?: string;
+  photoUrl?: string;
+  recipePhotoUrl?: string;
+  servings?: number;
+  estimatedMinutes?: number;
+  difficulty?: string;
+  ratingAvg?: number;
+  reviewCount?: number;
+  authorTitle?: string;
+  relayFromId?: string;
+  relayRootId?: string;
+  relayDepth?: number;
+};
+
 export default function PlazaScreen() {
   const router = useRouter();
-  const [globalRecipes, setGlobalRecipes] = useState([]);
-  const [posts, setPosts] = useState([]);
-  const [topRecipes, setTopRecipes] = useState([]);
+  const [globalRecipes, setGlobalRecipes] = useState<PlazaRecipe[]>([]);
+  const [posts, setPosts] = useState<PlazaRecipe[]>([]);
+  const [topRecipes, setTopRecipes] = useState<PlazaRecipe[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedRecipe, setSelectedRecipe] = useState(null);
+  const [selectedRecipe, setSelectedRecipe] = useState<PlazaRecipe | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
-  
-  // 💬 댓글 시스템 상태
+
   const [commentModalVisible, setCommentModalVisible] = useState(false);
-  const [targetPost, setTargetPost] = useState(null);
+  const [targetPost, setTargetPost] = useState<PlazaRecipe | null>(null);
   const [commentInput, setCommentInput] = useState("");
 
   // BM 및 열람 제한 상태
@@ -29,18 +51,11 @@ export default function PlazaScreen() {
   const [plazaViewsLeft, setPlazaViewsLeft] = useState(DAILY_PLAZA_LIMIT);
 
   // 상태(State) 및 메모이제이션 추가:
-  const [myCondiments, setMyCondiments] = useState([]);
+  const [myCondiments, setMyCondiments] = useState<string[]>([]);
   const [isFilterActive, setIsFilterActive] = useState(false);
-  
-  // 🔍 검색 및 태그 필터 상태 (New)
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedTag, setSelectedTag] = useState("전체");
-  const filterTags = ["전체", "다이어트", "야식", "초간단", "매콤한"];
-  const [activeTab, setActiveTab] = useState('explore'); // 'explore' | 'custom'
 
-  // TTS 조리 모드 상태
   const [isCookingMode, setIsCookingMode] = useState(false);
-  const [cookingSteps, setCookingSteps] = useState([]);
+  const [cookingSteps, setCookingSteps] = useState<string[]>([]);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
 
   const [shoppingModalVisible, setShoppingModalVisible] = useState(false);
@@ -92,14 +107,14 @@ export default function PlazaScreen() {
       const q = query(recipesRef, orderBy("createdAt", "desc"), limit(30));
       const querySnapshot = await getDocs(q);
       
-      const recipes = [];
-      querySnapshot.forEach((doc) => {
-        recipes.push({ id: doc.id, ...doc.data() });
+      const recipes: PlazaRecipe[] = [];
+      querySnapshot.forEach((d) => {
+        recipes.push({ id: d.id, ...d.data() } as PlazaRecipe);
       });
-      
-      const sortedByLikes = [...recipes].sort((a, b) => (b.likes || 0) - (a.likes || 0));
-      setTopRecipes(sortedByLikes.slice(0, 3));
 
+      const trendScore = (r: PlazaRecipe) => (r.likes || 0) + (r.comments?.length || 0) * 2;
+      const sortedTrending = [...recipes].sort((a, b) => trendScore(b) - trendScore(a));
+      setTopRecipes(sortedTrending.slice(0, 5));
       setGlobalRecipes(recipes);
     } catch (error) {
       console.error("광장 레시피 로드 에러:", error);
@@ -126,7 +141,7 @@ export default function PlazaScreen() {
     } catch (error) {}
   };
 
-  const handleLike = async (recipeId) => {
+  const handleLike = async (recipeId: string) => {
     try {
       setGlobalRecipes(prev => prev.map(recipe => recipe.id === recipeId ? { ...recipe, likes: (recipe.likes || 0) + 1 } : recipe));
       const recipeDocRef = doc(db, "global_recipes", recipeId);
@@ -137,26 +152,27 @@ export default function PlazaScreen() {
     }
   };
 
-  // 열람 횟수 검사 후 레시피 열기
-  const handleRecipeClick = async (recipe) => {
-    if (isProUser) {
-      setSelectedRecipe(recipe);
-      setModalVisible(true);
-      return;
-    }
+  const handleRecipeClick = async (recipe: PlazaRecipe) => {
+    // PRO 유저는 무제한
+    if (!isProUser) {
+      if (plazaViewsLeft <= 0) {
+        setProModalVisible(true);
+        return;
+      }
 
-    if (plazaViewsLeft > 0) {
       const newCount = plazaViewsLeft - 1;
       setPlazaViewsLeft(newCount);
       await AsyncStorage.setItem('cookdex_plaza_daily_views', JSON.stringify({
         date: new Date().toLocaleDateString(),
         count: newCount
       }));
-      setSelectedRecipe(recipe);
-      setModalVisible(true);
-    } else {
-      setProModalVisible(true);
     }
+
+    // 공통 레시피 상세 페이지로 이동
+    router.push({
+      pathname: '/recipe-detail',
+      params: { source: 'plaza', id: recipe.id },
+    });
   };
 
   // 내 주방으로 스크랩
@@ -166,7 +182,7 @@ export default function PlazaScreen() {
       const existingData = await AsyncStorage.getItem('cookdex_saved_recipes');
       const savedRecipes = existingData ? JSON.parse(existingData) : [];
       
-      if (savedRecipes.some(r => r.id === selectedRecipe.id)) {
+      if (savedRecipes.some((r: { id: string }) => r.id === selectedRecipe.id)) {
         Alert.alert("알림", "이미 내 주방에 저장된 레시피입니다.");
         return;
       }
@@ -177,7 +193,7 @@ export default function PlazaScreen() {
         content: selectedRecipe.content
       };
       
-      savedRecipes.unshift(newRecipe);
+        savedRecipes.unshift(newRecipe as any);
       await AsyncStorage.setItem('cookdex_saved_recipes', JSON.stringify(savedRecipes));
       Alert.alert("스크랩 완료! 📥", "이 레시피가 내 주방에 안전하게 저장되었습니다.");
     } catch (error) {
@@ -187,8 +203,8 @@ export default function PlazaScreen() {
 
   // TTS 조리 모드 로직
   const startCookingMode = () => {
-    if (!selectedRecipe) return;
-    const extractedSteps = selectedRecipe.content.split('\n').filter(line => /^\d+\.\s/.test(line.trim())).map(line => line.replace(/^\d+\.\s/, '').replace(/\*\*/g, '').trim());
+    if (!selectedRecipe?.content) return;
+    const extractedSteps = selectedRecipe.content.split('\n').filter((line: string) => /^\d+\.\s/.test(line.trim())).map((line: string) => line.replace(/^\d+\.\s/, '').replace(/\*\*/g, '').trim());
     if (extractedSteps.length === 0) { Alert.alert("알림", "조리 단계를 명확히 인식하지 못했습니다."); return; }
     setCookingSteps(extractedSteps); setCurrentStepIndex(0); setIsCookingMode(true);
     Speech.speak(extractedSteps[0], { language: 'ko-KR', rate: 0.95, pitch: 1.0 });
@@ -198,41 +214,24 @@ export default function PlazaScreen() {
   const handleReplayStep = () => { Speech.stop(); Speech.speak(cookingSteps[currentStepIndex], { language: 'ko-KR', rate: 0.95 }); };
   const handleExitCookingMode = () => { Speech.stop(); setIsCookingMode(false); };
 
-  const extractTitle = (content) => { const match = content.match(/#\s+(.*)/); return match ? match[1] : "이름 없는 요리"; };
-  const formatDate = (isoString) => { if (!isoString) return ""; const date = new Date(isoString); return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`; };
+  const extractTitle = (content: string) => { const match = content.match(/#\s+(.*)/); return match ? match[1] : '이름 없는 요리'; };
+  const formatDate = (isoString?: string) => { if (!isoString) return ''; const date = new Date(isoString); return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`; };
 
-  const displayedRecipes = React.useMemo(() => {
+  const displayedRecipes = useMemo(() => {
     let result = [...globalRecipes];
 
-    // 1. 태그 필터링 (DB에 태그가 없으므로 본문 내용으로 대체 검색)
-    if (selectedTag !== "전체") {
-      result = result.filter(p => p.content && p.content.includes(selectedTag));
-    }
-
-    // 2. 검색어 필터링
-    if (searchQuery) {
-      result = result.filter(p => (p.content && p.content.includes(searchQuery)) || (p.authorName && p.authorName.includes(searchQuery)));
-    }
-
-    // 3. 탭 필터 (내 맞춤일 경우, 유저가 주로 쓰는 기본 식재료 키워드가 포함된 게시물만 노출 - 임시 하드코딩 필터)
-    if (activeTab === 'custom') {
-      // 실제로는 유저 선호도 기반이지만, 기획 요청대로 하드코딩 필터 적용
-      result = result.filter(p => p.content && (p.content.includes('감자') || p.content.includes('돼지고기') || p.content.includes('김치')));
-    }
-    
-    // 4. 내 양념장 맞춤 정렬 (기존 로직 유지)
+    // 1. 내 양념장 맞춤 정렬 (옵션)
     if (isFilterActive && myCondiments.length > 0) {
       result.sort((a, b) => {
-        const countA = myCondiments.filter(c => a.content.includes(c.split(' ')[0])).length;
-        const countB = myCondiments.filter(c => b.content.includes(c.split(' ')[0])).length;
+        const countA = myCondiments.filter((c: string) => a.content?.includes(c.split(' ')[0])).length;
+        const countB = myCondiments.filter((c: string) => b.content?.includes(c.split(' ')[0])).length;
         return countB - countA;
       });
     }
     return result;
-  }, [globalRecipes, isFilterActive, myCondiments, searchQuery, selectedTag, activeTab]);
+  }, [globalRecipes, isFilterActive, myCondiments]);
 
-  // 💬 댓글 모달 열기
-  const handleOpenComments = (item) => {
+  const handleOpenComments = (item: PlazaRecipe) => {
     setTargetPost(item);
     setCommentModalVisible(true);
   };
@@ -243,9 +242,9 @@ export default function PlazaScreen() {
     const newComment = commentInput.trim();
     
     setGlobalRecipes(prev => prev.map(recipe => {
-      if (recipe.id === targetPost.id) {
+      if (targetPost && recipe.id === targetPost.id) {
         const updatedComments = recipe.comments ? [...recipe.comments, newComment] : [newComment];
-        setTargetPost({ ...recipe, comments: updatedComments }); // 모달 내부 업데이트
+        setTargetPost({ ...recipe, comments: updatedComments });
         return { ...recipe, comments: updatedComments };
       }
       return recipe;
@@ -265,6 +264,44 @@ export default function PlazaScreen() {
         </View>
       </View>
 
+      {/* 홈 화면과 통일된 스타일의 검색바 - 전체 검색 포털로 이동 */}
+      <View style={styles.searchBarContainer}>
+        <TouchableOpacity
+          style={styles.searchBar}
+          activeOpacity={0.9}
+          onPress={() =>
+            router.push({
+              pathname: '/search',
+              params: { tab: 'global' },
+            })
+          }
+        >
+          <Text style={styles.searchPlaceholder}>레시피 제목이나 셰프 검색</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* 명예의 전당 / 랭킹 / 레시피 분류 아이콘 그리드 */}
+      <View style={styles.iconGridSection}>
+        <TouchableOpacity style={styles.iconGridItem} onPress={() => router.push('/plaza-hof')} activeOpacity={0.8}>
+          <View style={[styles.iconGridIconWrap, { backgroundColor: Colors.primarySoft }]}>
+            <Ionicons name="trophy" size={28} color={Colors.primary} />
+          </View>
+          <Text style={styles.iconGridLabel}>명예의 전당</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.iconGridItem} onPress={() => router.push('/plaza-ranking')} activeOpacity={0.8}>
+          <View style={[styles.iconGridIconWrap, { backgroundColor: Colors.primarySoft }]}>
+            <Ionicons name="podium" size={28} color={Colors.primary} />
+          </View>
+          <Text style={styles.iconGridLabel}>랭킹</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.iconGridItem} onPress={() => router.push('/categories')} activeOpacity={0.8}>
+          <View style={[styles.iconGridIconWrap, { backgroundColor: Colors.primarySoft }]}>
+            <Ionicons name="book" size={28} color={Colors.primary} />
+          </View>
+          <Text style={styles.iconGridLabel}>레시피 분류</Text>
+        </TouchableOpacity>
+      </View>
+
       {loading ? (
         <View style={styles.centerBox}>
           <ActivityIndicator size="large" color="#FF8C00" />
@@ -272,8 +309,9 @@ export default function PlazaScreen() {
         </View>
       ) : globalRecipes.length === 0 ? (
         <View style={styles.centerBox}>
-          <Text style={styles.emptyText}>아직 공유된 레시피가 없습니다.</Text>
-          <Text style={styles.emptySubText}>첫 번째로 레시피를 공유해 보세요!</Text>
+          <Text style={styles.emptyEmoji}>🍽️</Text>
+          <Text style={styles.emptyText}>현재 작성된 레시피가 없습니다.</Text>
+          <Text style={styles.emptySubText}>첫 번째로 요리 광장을 채워줄 셰프가 되어 보세요.</Text>
         </View>
       ) : (
         <FlatList
@@ -283,42 +321,10 @@ export default function PlazaScreen() {
           showsVerticalScrollIndicator={false}
           ListHeaderComponent={
             <>
-              {/* 🔍 검색 및 태그 필터 UI (New) */}
-              <View style={{ padding: 15, backgroundColor: '#FFFDF9' }}>
-                <TextInput 
-                  style={{ backgroundColor: '#F9F5F3', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#E8D5D0', marginBottom: 15, color: '#3A2E2B' }} 
-                  placeholder="레시피 제목이나 셰프 검색" 
-                  placeholderTextColor="#A89F9C" 
-                  value={searchQuery} 
-                  onChangeText={setSearchQuery} 
-                />
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
-                  {filterTags.map(tag => (
-                    <TouchableOpacity 
-                      key={tag} 
-                      style={{ backgroundColor: selectedTag === tag ? '#FF8C00' : '#F5EBE7', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20 }}
-                      onPress={() => setSelectedTag(tag)}
-                    >
-                      <Text style={{ color: selectedTag === tag ? '#000' : '#8C7A76', fontWeight: 'bold' }}>{tag === '전체' ? '전체' : `#${tag}`}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-
-              {/* 탐색 / 내 맞춤 탭 버튼 */}
-              <View style={{ flexDirection: 'row', paddingHorizontal: 15, paddingBottom: 10, backgroundColor: '#FFFDF9' }}>
-                <TouchableOpacity style={{ flex: 1, paddingVertical: 10, borderBottomWidth: 3, borderBottomColor: activeTab === 'explore' ? '#FF8C00' : 'transparent', alignItems: 'center' }} onPress={() => setActiveTab('explore')}>
-                  <Text style={{ fontWeight: 'bold', color: activeTab === 'explore' ? '#3A2E2B' : '#A89F9C', fontSize: 16 }}>탐색</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={{ flex: 1, paddingVertical: 10, borderBottomWidth: 3, borderBottomColor: activeTab === 'custom' ? '#FF8C00' : 'transparent', alignItems: 'center' }} onPress={() => setActiveTab('custom')}>
-                  <Text style={{ fontWeight: 'bold', color: activeTab === 'custom' ? '#3A2E2B' : '#A89F9C', fontSize: 16 }}>내 맞춤</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* 이달의 랭킹 셰프 (명예의 전당) */}
+              {/* 실시간 급상승 레시피 (열람 제한 적용) */}
               {topRecipes.length > 0 && (
                 <View style={styles.rankingSection}>
-                  <Text style={styles.rankingTitle}>이달의 명예의 전당 (Top 3)</Text>
+                  <Text style={styles.rankingTitle}>실시간 급상승 레시피</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rankingScroll}>
                     {topRecipes.map((item, index) => (
                       <TouchableOpacity 
@@ -328,12 +334,12 @@ export default function PlazaScreen() {
                         onPress={() => handleRecipeClick(item)}
                       >
                         <View style={styles.rankingBadge}>
-                          <Text style={styles.rankingBadgeText}>{index + 1}위</Text>
+                          <Text style={styles.rankingBadgeText}>{index + 1}</Text>
                         </View>
                         <Text style={styles.rankingAuthor}>{item.authorName} 셰프</Text>
-                        <Text style={styles.rankingRecipeTitle} numberOfLines={1}>{extractTitle(item.content)}</Text>
+                        <Text style={styles.rankingRecipeTitle} numberOfLines={1}>{extractTitle(item.content ?? '')}</Text>
                         <View style={styles.rankingLikeBox}>
-                          <Text style={styles.rankingLikeIcon}>좋아요 {item.likes || 0}</Text>
+                          <Text style={styles.rankingLikeIcon}>★ {(item.ratingAvg ?? 0) || '-'} ({(item.reviewCount ?? item.comments?.length ?? 0)})</Text>
                         </View>
                       </TouchableOpacity>
                     ))}
@@ -361,49 +367,71 @@ export default function PlazaScreen() {
             </>
           }
           renderItem={({ item }) => {
-            const matchCount = isFilterActive ? myCondiments.filter(c => item.content.includes(c.split(' ')[0])).length : 0;
+            const matchCount = isFilterActive ? myCondiments.filter((c: string) => item.content?.includes(c.split(' ')[0])).length : 0;
+            const ratingAvg = item.ratingAvg ?? 0;
+            const reviewCount = item.reviewCount ?? item.comments?.length ?? 0;
+            const displayRating = ratingAvg > 0 ? ratingAvg.toFixed(1) : ((item.likes ?? 0) > 0 ? '4.0' : '-');
+            const hasPhoto = !!item.photoUrl || !!item.recipePhotoUrl;
+            const photoUri = item.photoUrl || item.recipePhotoUrl;
             return (
               <View style={styles.feedCard}>
-                <TouchableOpacity activeOpacity={0.8} onPress={() => handleRecipeClick(item)} style={styles.feedContent}>
-                  <View style={styles.cardHeader}>
-                    <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                      <View style={[styles.authorBox, item.likes >= 10 && { backgroundColor: '#FF8C00' }]}>
-                        <Text style={styles.authorIcon}>{item.likes >= 10 ? "👑" : "👨‍🍳"}</Text>
-                        <Text style={[styles.authorName, item.likes >= 10 && { color: '#000' }]}>{item.authorName}</Text>
+                <TouchableOpacity activeOpacity={0.8} onPress={() => handleRecipeClick(item)} style={styles.feedCardInner}>
+                  {/* 썸네일: 포토 인증 시 완성 사진으로 카드 상단 전체 덮기 */}
+                  <View style={styles.cardThumbWrap}>
+                    {hasPhoto && photoUri ? (
+                      <Image source={{ uri: photoUri }} style={styles.cardThumbImage} resizeMode="cover" />
+                    ) : (
+                      <View style={styles.cardThumbPlaceholder} />
+                    )}
+                    {hasPhoto && (
+                      <View style={styles.photoVerifiedBadge}>
+                        <Text style={styles.photoVerifiedText}>📷 사진 인증</Text>
                       </View>
-                      {isFilterActive && matchCount > 0 && (
-                        <View style={styles.matchBadge}>
-                          <Text style={styles.matchBadgeText}>보유 재료 {matchCount}개 포함</Text>
-                        </View>
-                      )}
+                    )}
+                    {/* 썸네일 위 오버레이: 인분 / 시간 / 난이도 */}
+                    <View style={styles.cardThumbMeta}>
+                      <Text style={styles.cardThumbMetaText}>
+                        {item.servings ? `👥 ${item.servings}인분` : ''}
+                        {item.servings && (item.estimatedMinutes || item.difficulty) ? '  ' : ''}
+                        {item.estimatedMinutes ? `⏱ ${item.estimatedMinutes}분 이내` : ''}
+                        {item.estimatedMinutes && item.difficulty ? '  ' : ''}
+                        {item.difficulty ? `★ ${item.difficulty}` : ''}
+                      </Text>
                     </View>
-                    <Text style={styles.cardDate}>{formatDate(item.createdAt)}</Text>
                   </View>
-                  <Text style={styles.cardTitle} numberOfLines={2}>{extractTitle(item.content)}</Text>
-                  <Text style={styles.cardPreview} numberOfLines={3}>{item.content.replace(/#/g, '').replace(/\*/g, '').trim()}</Text>
+                  <View style={styles.feedContent}>
+                    <View style={styles.cardHeader}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <View style={[styles.authorBox, ((item.likes ?? 0) >= 10) && { backgroundColor: Colors.primary }]}>
+                          <Text style={styles.authorIcon}>{item.authorTitle ? '🏅' : ((item.likes ?? 0) >= 10 ? '👑' : '👨‍🍳')}</Text>
+                          <Text style={[styles.authorName, (item.likes ?? 0) >= 10 && { color: Colors.textInverse }]}>{item.authorName}</Text>
+                        </View>
+                        {item.authorTitle && (
+                          <View style={styles.authorBadge}>
+                            <Text style={styles.authorBadgeText}>{item.authorTitle}</Text>
+                          </View>
+                        )}
+                        {isFilterActive && matchCount > 0 && (
+                          <View style={styles.matchBadge}>
+                            <Text style={styles.matchBadgeText}>보유 {matchCount}개</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.cardDate}>{formatDate(item.createdAt)}</Text>
+                    </View>
+                    <Text style={styles.cardTitle} numberOfLines={2}>{extractTitle(item.content ?? '')}</Text>
+                    {!hasPhoto && item.content && (
+                      <Text style={styles.cardPreview} numberOfLines={2}>{item.content.replace(/#/g, '').replace(/\*/g, '').trim()}</Text>
+                    )}
+                  </View>
                 </TouchableOpacity>
-                
                 <View style={styles.cardFooter}>
-                  <TouchableOpacity style={styles.likeBtn} onPress={() => handleLike(item.id)}>
-                    <Text style={styles.likeIcon}>좋아요</Text>
-                    <Text style={styles.likeCount}>{item.likes || 0}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.commentBtn} onPress={() => handleOpenComments(item)}>
-                    <Text style={styles.commentIcon}>댓글</Text>
-                    <Text style={styles.commentCount}>{item.comments ? item.comments.length : 0}</Text>
-                  </TouchableOpacity>
-                  
-                  {/* 🍴 릴레이 챌린지 (Fork) 버튼 */}
-                  <TouchableOpacity 
-                    style={{ paddingVertical: 5, flexDirection: 'row', alignItems: 'center', marginLeft: 15 }} 
-                    onPress={() => Alert.alert("릴레이 레시피", `'${item.title || extractTitle(item.content)}' 레시피에 유저님의 비법을 더하시겠습니까?`, [
-                      { text: "취소", style: "cancel" },
-                      { text: "내 비법 더하기", onPress: () => router.push({ pathname: '/create-recipe', params: { forkFrom: item.title || extractTitle(item.content), baseIngredients: item.tags?.join(',') || '' } }) }
-                    ])}
-                  >
-                    <Text style={{ fontWeight: 'bold', color: '#4CAF50' }}>릴레이 참여</Text>
-                  </TouchableOpacity>
-
+                  <View style={styles.cardFooterLeft}>
+                    <View style={styles.ratingChip}>
+                      <Text style={styles.ratingChipStar}>★</Text>
+                      <Text style={styles.ratingChipText}>{displayRating} ({reviewCount})</Text>
+                    </View>
+                  </View>
                   <TouchableOpacity onPress={() => handleRecipeClick(item)}>
                     <Text style={styles.readMoreText}>레시피 보기 →</Text>
                   </TouchableOpacity>
@@ -537,118 +565,743 @@ export default function PlazaScreen() {
 }
 
 const markdownStyles = StyleSheet.create({ 
-  body: { color: '#3A2E2B', fontSize: 15, lineHeight: 24 }, 
-  heading1: { color: '#FF8C00', fontSize: 22, fontWeight: 'bold' }, 
-  blockquote: { backgroundColor: '#F9F5F3', borderLeftWidth: 4, borderLeftColor: '#4CAF50', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 5, marginVertical: 10 }
+  body: { color: Colors.textMain, fontSize: 15, lineHeight: 24 }, 
+  heading1: { color: Colors.primary, fontSize: 22, fontWeight: 'bold' }, 
+  blockquote: {
+    backgroundColor: Colors.primarySoft,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.success,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    marginVertical: 10,
+  },
 });
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#2A2421' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: Platform.OS === 'android' ? 50 : 20, marginBottom: 10 },
-  headerTitle: { fontSize: 26, fontWeight: '900', color: '#FFFDF9', marginBottom: 5 },
-  headerSub: { fontSize: 14, color: '#A89F9C' },
-  limitBadge: { backgroundColor: '#4A3F3A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: '#FF8C00' },
-  limitBadgeText: { color: '#FFB347', fontSize: 12, fontWeight: 'bold' },
-  
-  centerBox: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
-  loadingText: { color: '#FF8C00', marginTop: 15, fontSize: 15, fontWeight: 'bold' },
-  emptyEmoji: { fontSize: 50, marginBottom: 15 },
-  emptyText: { fontSize: 18, fontWeight: 'bold', color: '#FFFDF9', marginBottom: 8 },
-  emptySubText: { fontSize: 14, color: '#A89F9C', textAlign: 'center' },
-  
-  listContainer: { padding: 15, paddingBottom: 100 },
-  feedCard: { backgroundColor: '#3A322F', borderRadius: 20, marginBottom: 20, borderWidth: 1, borderColor: '#4A3F3A', shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 5, elevation: 5 },
-  feedContent: { padding: 20, paddingBottom: 15 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  authorBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A3F3A', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
-  authorIcon: { fontSize: 14, marginRight: 5 },
-  authorName: { fontSize: 13, color: '#FFFDF9', fontWeight: 'bold' },
-  cardDate: { fontSize: 12, color: '#8C7A76', fontWeight: 'bold' },
-  cardTitle: { fontSize: 18, fontWeight: 'bold', color: '#FF8C00', marginBottom: 10, lineHeight: 24 },
-  cardPreview: { fontSize: 13, color: '#A89F9C', lineHeight: 20 },
-  
-  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15, borderTopWidth: 1, borderTopColor: '#4A3F3A', backgroundColor: 'rgba(0,0,0,0.1)', borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
-  likeBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A3F3A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15 },
-  likeIcon: { fontSize: 14, marginRight: 6 },
-  likeCount: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold' },
-  commentBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A3F3A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15, marginLeft: 10 },
-  commentIcon: { fontSize: 14, marginRight: 6 },
-  commentCount: { color: '#FFFDF9', fontSize: 13, fontWeight: 'bold' },
-  readMoreText: { color: '#FF8C00', fontSize: 13, fontWeight: 'bold' },
+  container: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? 32 : 16,
+    paddingBottom: 16,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: Colors.textMain,
+    marginBottom: 4,
+  },
+  headerSub: {
+    fontSize: 13,
+    color: Colors.textSub,
+  },
+  limitBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primarySoft,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  limitBadgeText: {
+    color: Colors.primary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalContent: { height: '85%', backgroundColor: '#FFFDF9', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -5 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 10 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#E8D5D0' },
-  modalAuthor: { fontSize: 16, fontWeight: '900', color: '#8E24AA' },
-  closeBtn: { backgroundColor: '#F5EBE7', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15 },
-  closeBtnText: { color: '#3A2E2B', fontSize: 13, fontWeight: 'bold' },
-  markdownScroll: { flex: 1 },
-  
-  ttsStartBtn: { backgroundColor: '#E3F2FD', paddingVertical: 15, borderRadius: 15, alignItems: 'center', marginBottom: 15, borderWidth: 1, borderColor: '#CE93D8' }, 
-  ttsStartBtnText: { color: '#8E24AA', fontSize: 15, fontWeight: '900' },
-  scrapBtn: { backgroundColor: '#4CAF50', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginTop: 15 },
-  scrapBtnText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  // 홈 화면 검색 UI와 톤을 맞춘 광장 상단 검색바
+  searchBarContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    backgroundColor: Colors.bgMain,
+  },
+  searchBar: {
+    height: 48,
+    borderRadius: Radius.lg,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    backgroundColor: Colors.bgElevated,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.soft,
+  },
+  searchPlaceholder: {
+    fontSize: 14,
+    color: Colors.textSub,
+  },
 
-  proModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 20 },
-  proModalContent: { backgroundColor: '#2A2421', borderRadius: 24, padding: 25, borderWidth: 1, borderColor: '#FF8C00', alignItems: 'center', shadowColor: '#FF8C00', shadowOffset: {width:0, height:0}, shadowOpacity: 0.5, shadowRadius: 20, elevation: 15 },
-  proTitle: { fontSize: 26, fontWeight: '900', color: '#FF8C00', marginBottom: 10 },
-  proSubTitle: { fontSize: 14, color: '#FFFDF9', textAlign: 'center', marginBottom: 20, fontWeight: 'bold' },
-  proBenefitBox: { backgroundColor: '#3A322F', padding: 15, borderRadius: 12, width: '100%', marginBottom: 25 },
-  proBenefitText: { color: '#E8D5D0', fontSize: 13, marginBottom: 8, fontWeight: 'bold' },
-  proSubscribeBtn: { backgroundColor: '#FF8C00', paddingVertical: 16, width: '100%', borderRadius: 16, alignItems: 'center', marginBottom: 12 },
-  proSubscribeBtnText: { color: '#000', fontSize: 16, fontWeight: '900' },
-  proCancelBtn: { paddingVertical: 10 },
-  proCancelBtnText: { color: '#A89F9C', fontSize: 13, fontWeight: 'bold', textDecorationLine: 'underline' },
+  iconGridSection: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    backgroundColor: Colors.bgMain,
+  },
+  iconGridItem: {
+    alignItems: 'center',
+    minWidth: 90,
+  },
+  iconGridIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+    ...Shadows.soft,
+  },
+  iconGridLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textMain,
+    textAlign: 'center',
+  },
 
-  ttsContainer: { flex: 1, backgroundColor: '#2A2421', padding: 20, justifyContent: 'space-between' }, 
-  ttsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 }, 
-  ttsStepIndicator: { color: '#FFB347', fontSize: 18, fontWeight: 'bold' }, 
-  ttsCloseBtn: { backgroundColor: 'rgba(255,255,255,0.2)', paddingVertical: 8, paddingHorizontal: 15, borderRadius: 20 }, 
-  ttsCloseBtnText: { color: '#fff', fontWeight: 'bold' }, 
-  ttsBody: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10 }, 
-  ttsBigText: { color: '#FFFDF9', fontSize: 32, fontWeight: '900', textAlign: 'center', lineHeight: 45 }, 
-  ttsControls: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 40 }, 
-  ttsBtn: { backgroundColor: '#4A3F3A', paddingVertical: 20, flex: 1, borderRadius: 20, alignItems: 'center', marginHorizontal: 5 }, 
-  ttsBtnText: { color: '#FFFDF9', fontSize: 16, fontWeight: 'bold' }, 
-  ttsBtnMain: { backgroundColor: '#FF8C00', paddingVertical: 25, flex: 1.5, borderRadius: 25, alignItems: 'center', marginHorizontal: 5, shadowColor: '#FF8C00', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 }, 
-  ttsBtnMainText: { color: '#fff', fontSize: 18, fontWeight: '900' },
-  filterContainer: { paddingHorizontal: 20, marginBottom: 15 },
-  filterBtn: { backgroundColor: '#3A322F', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: '#5A4E49', alignSelf: 'flex-start' },
-  filterBtnActive: { backgroundColor: '#FF8C00', borderColor: '#FF8C00' },
-  filterBtnText: { color: '#A89F9C', fontSize: 13, fontWeight: 'bold' },
-  filterBtnTextActive: { color: '#000', fontSize: 13, fontWeight: '900' },
-  matchBadge: { backgroundColor: '#4CAF50', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, marginLeft: 10 },
-  matchBadgeText: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
-  shoppingBtn: { backgroundColor: '#0073E9', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginTop: 10 },
-  shoppingBtnText: { color: '#fff', fontSize: 16, fontWeight: '900' },
-  shoppingModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  shoppingModalContent: { backgroundColor: '#3A322F', borderRadius: 24, padding: 25, borderWidth: 1, borderColor: '#0073E9', position: 'relative', width: '90%' },
-  shoppingTitle: { fontSize: 22, fontWeight: '900', color: '#0073E9', marginBottom: 10, textAlign: 'center' },
-  shoppingSub: { fontSize: 14, color: '#FFFDF9', textAlign: 'center', marginBottom: 20 },
-  styleInput: { backgroundColor: '#2A2421', color: '#FFFDF9', borderRadius: 12, padding: 15, fontSize: 16, borderWidth: 1, borderColor: '#5A4E49', marginBottom: 20 },
-  shoppingSubmitBtn: { backgroundColor: '#0073E9', paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginBottom: 12 },
-  shoppingSubmitBtnText: { color: '#fff', fontSize: 16, fontWeight: '900' },
-  rankingSection: { marginBottom: 20, paddingTop: 10 },
-  rankingTitle: { fontSize: 20, fontWeight: '900', color: '#FFD700', marginBottom: 15, paddingHorizontal: 20 },
-  rankingScroll: { gap: 15, paddingHorizontal: 20, paddingBottom: 10 },
-  rankingCard: { backgroundColor: '#3A322F', padding: 15, borderRadius: 16, width: 160, borderWidth: 1, borderColor: '#FFD700', shadowColor: '#FFD700', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 5, elevation: 6 },
-  rankingBadge: { position: 'absolute', top: -10, left: 10, backgroundColor: '#000', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: '#FFD700' },
-  rankingBadgeText: { color: '#FFD700', fontSize: 12, fontWeight: '900' },
-  rankingAuthor: { color: '#FFFDF9', fontSize: 12, fontWeight: 'bold', marginTop: 10, marginBottom: 5 },
-  rankingRecipeTitle: { color: '#FF8C00', fontSize: 16, fontWeight: '900', marginBottom: 10 },
-  rankingLikeBox: { backgroundColor: '#2A2421', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  rankingLikeIcon: { color: '#E8D5D0', fontSize: 12, fontWeight: 'bold' },
+  centerBox: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  loadingText: {
+    color: Colors.primary,
+    marginTop: 12,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  emptyEmoji: {
+    fontSize: 42,
+    marginBottom: 12,
+  },
+  emptyText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: Colors.textMain,
+    marginBottom: 6,
+  },
+  emptySubText: {
+    fontSize: 13,
+    color: Colors.textSub,
+    textAlign: 'center',
+  },
+
+  listContainer: {
+    paddingHorizontal: 16,
+    paddingBottom: 96,
+  },
+  feedCard: {
+    backgroundColor: Colors.bgElevated,
+    borderRadius: Radius.xl,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    overflow: 'hidden',
+    ...Shadows.soft,
+  },
+  feedCardInner: {},
+  cardThumbWrap: {
+    height: 160,
+    width: '100%',
+    backgroundColor: Colors.bgMuted,
+    position: 'relative',
+  },
+  cardThumbImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  cardThumbPlaceholder: {
+    flex: 1,
+    backgroundColor: Colors.bgMuted,
+  },
+  photoVerifiedBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+  },
+  photoVerifiedText: {
+    color: Colors.textInverse,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  cardThumbMeta: {
+    position: 'absolute',
+    bottom: 8,
+    left: 10,
+    right: 10,
+  },
+  cardThumbMetaText: {
+    fontSize: 11,
+    color: Colors.textInverse,
+    fontWeight: '600',
+    textShadowColor: '#000',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  feedContent: {
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 12,
+  },
+  authorBadge: {
+    marginLeft: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.sm,
+    backgroundColor: Colors.bgMuted,
+  },
+  authorBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.textSub,
+  },
+  ratingChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primarySoft,
+  },
+  ratingChipStar: {
+    fontSize: 12,
+    color: Colors.primary,
+    marginRight: 4,
+  },
+  ratingChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textMain,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  authorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.primarySoft,
+  },
+  authorIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  authorName: {
+    fontSize: 13,
+    color: Colors.textMain,
+    fontWeight: '600',
+  },
+  cardDate: {
+    fontSize: 12,
+    color: Colors.textSub,
+    fontWeight: '500',
+  },
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: Colors.textMain,
+    marginBottom: 6,
+    lineHeight: 23,
+  },
+  cardPreview: {
+    fontSize: 13,
+    color: Colors.textSub,
+    lineHeight: 20,
+  },
+
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  cardFooterLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  relayBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    marginLeft: 8,
+  },
+  relayBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  readMoreText: {
+    color: Colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: Colors.overlayDark,
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    height: '85%',
+    backgroundColor: Colors.bgModal,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: 20,
+    ...Shadows.glassDiffused,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  modalAuthor: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.textMain,
+  },
+  closeBtn: {
+    backgroundColor: Colors.bgMuted,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Radius.pill,
+  },
+  closeBtnText: {
+    color: Colors.textMain,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  markdownScroll: {
+    flex: 1,
+  },
+
+  ttsStartBtn: {
+    backgroundColor: Colors.primarySoft,
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    alignItems: 'center',
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  ttsStartBtnText: {
+    color: Colors.primary,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  scrapBtn: {
+    backgroundColor: Colors.success,
+    paddingVertical: 15,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginTop: 14,
+  },
+  scrapBtnText: {
+    color: Colors.textInverse,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  proModalOverlay: {
+    flex: 1,
+    backgroundColor: Colors.overlayDark,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  proModalContent: {
+    backgroundColor: Colors.bgElevated,
+    borderRadius: Radius.xl,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: Colors.primarySoft,
+    alignItems: 'center',
+    ...Shadows.glassDiffused,
+  },
+  proTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: Colors.primary,
+    marginBottom: 8,
+  },
+  proSubTitle: {
+    fontSize: 13,
+    color: Colors.textMain,
+    textAlign: 'center',
+    marginBottom: 18,
+    fontWeight: '600',
+  },
+  proBenefitBox: {
+    backgroundColor: Colors.primarySoft,
+    padding: 14,
+    borderRadius: Radius.md,
+    width: '100%',
+    marginBottom: 22,
+  },
+  proBenefitText: {
+    color: Colors.textMain,
+    fontSize: 13,
+    marginBottom: 6,
+    fontWeight: '500',
+  },
+  proSubscribeBtn: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    width: '100%',
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  proSubscribeBtnText: {
+    color: Colors.textInverse,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  proCancelBtn: {
+    paddingVertical: 8,
+  },
+  proCancelBtnText: {
+    color: Colors.textSub,
+    fontSize: 12,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+
+  ttsContainer: {
+    flex: 1,
+    backgroundColor: Colors.bgMain,
+    padding: 20,
+    justifyContent: 'space-between',
+  },
+  ttsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  ttsStepIndicator: {
+    color: Colors.primary,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  ttsCloseBtn: {
+    backgroundColor: Colors.bgElevated,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: Radius.pill,
+  },
+  ttsCloseBtnText: {
+    color: Colors.textMain,
+    fontWeight: '600',
+  },
+  ttsBody: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  ttsBigText: {
+    color: Colors.textMain,
+    fontSize: 28,
+    fontWeight: '900',
+    textAlign: 'center',
+    lineHeight: 40,
+  },
+  ttsControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  ttsBtn: {
+    backgroundColor: Colors.bgMuted,
+    paddingVertical: 18,
+    flex: 1,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginHorizontal: 5,
+  },
+  ttsBtnText: {
+    color: Colors.textMain,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  ttsBtnMain: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 20,
+    flex: 1.3,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginHorizontal: 5,
+    ...Shadows.glassTight,
+  },
+  ttsBtnMainText: {
+    color: Colors.textInverse,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+
+  filterContainer: {
+    paddingHorizontal: 20,
+    marginBottom: 14,
+  },
+  filterBtn: {
+    backgroundColor: Colors.bgMuted,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignSelf: 'flex-start',
+  },
+  filterBtnActive: {
+    backgroundColor: Colors.primarySoft,
+    borderColor: Colors.primary,
+  },
+  filterBtnText: {
+    color: Colors.textSub,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  filterBtnTextActive: {
+    color: Colors.primary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  matchBadge: {
+    backgroundColor: Colors.success,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.sm,
+    marginLeft: 8,
+  },
+  matchBadgeText: {
+    color: Colors.textInverse,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+
+  shoppingBtn: {
+    backgroundColor: Colors.actionShop,
+    paddingVertical: 16,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  shoppingBtnText: {
+    color: Colors.textInverse,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  shoppingModalOverlay: {
+    flex: 1,
+    backgroundColor: Colors.overlayDark,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  shoppingModalContent: {
+    backgroundColor: Colors.bgElevated,
+    borderRadius: Radius.xl,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: Colors.actionShop,
+    width: '90%',
+  },
+  shoppingTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: Colors.actionShop,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  shoppingSub: {
+    fontSize: 13,
+    color: Colors.textSub,
+    textAlign: 'center',
+    marginBottom: 18,
+  },
+  styleInput: {
+    backgroundColor: Colors.bgMuted,
+    color: Colors.textMain,
+    borderRadius: Radius.md,
+    padding: 14,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 18,
+  },
+  shoppingSubmitBtn: {
+    backgroundColor: Colors.actionShop,
+    paddingVertical: 14,
+    borderRadius: Radius.lg,
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  shoppingSubmitBtnText: {
+    color: Colors.textInverse,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  rankingSection: {
+    marginBottom: 18,
+    paddingTop: 20,
+  },
+  rankingTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: Colors.textMain,
+    marginBottom: 10,
+    paddingHorizontal: 20,
+  },
+  rankingScroll: {
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+  },
+  rankingCard: {
+    backgroundColor: Colors.bgElevated,
+    padding: 14,
+    borderRadius: Radius.lg,
+    width: 160,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.glass,
+  },
+  rankingBadge: {
+    position: 'absolute',
+    top: 0,
+    left: 10,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+  },
+  rankingBadgeText: {
+    color: Colors.textInverse,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  rankingAuthor: {
+    color: Colors.textSub,
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  rankingRecipeTitle: {
+    color: Colors.textMain,
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 10,
+  },
+  rankingLikeBox: {
+    backgroundColor: Colors.bgMuted,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+  },
+  rankingLikeIcon: {
+    color: Colors.textSub,
+    fontSize: 11,
+    fontWeight: '600',
+  },
 
   // 💬 댓글 스타일
-  commentModalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.6)' },
-  commentModalContent: { height: '60%', backgroundColor: '#FFFDF9', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
-  commentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#E8D5D0' },
-  commentTitle: { fontSize: 18, fontWeight: '900', color: '#3A2E2B' },
-  commentRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F5EBE7' },
-  commentText: { fontSize: 14, color: '#3A2E2B', lineHeight: 20 },
-  emptyCommentText: { textAlign: 'center', color: '#A89F9C', marginTop: 30, fontSize: 14 },
-  commentInputRow: { flexDirection: 'row', gap: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#E8D5D0' },
-  commentInput: { flex: 1, backgroundColor: '#F9F5F3', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#E8D5D0', color: '#3A2E2B' },
-  commentSubmitBtn: { backgroundColor: '#FF8C00', justifyContent: 'center', paddingHorizontal: 20, borderRadius: 12 },
-  commentSubmitText: { fontWeight: '900', color: '#000' }
+  commentModalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: Colors.overlayDark,
+  },
+  commentModalContent: {
+    height: '60%',
+    backgroundColor: Colors.bgModal,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: 20,
+  },
+  commentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  commentTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: Colors.textMain,
+  },
+  commentRow: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  commentText: {
+    fontSize: 14,
+    color: Colors.textMain,
+    lineHeight: 20,
+  },
+  emptyCommentText: {
+    textAlign: 'center',
+    color: Colors.textSub,
+    marginTop: 24,
+    fontSize: 13,
+  },
+  commentInputRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  commentInput: {
+    flex: 1,
+    backgroundColor: Colors.bgMuted,
+    padding: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    color: Colors.textMain,
+    fontSize: 14,
+  },
+  commentSubmitBtn: {
+    backgroundColor: Colors.primary,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    borderRadius: Radius.md,
+  },
+  commentSubmitText: {
+    fontWeight: '800',
+    color: Colors.textInverse,
+    fontSize: 13,
+  },
+
 });

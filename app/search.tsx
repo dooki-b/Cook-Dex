@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Speech from "expo-speech";
 import {
   addDoc,
@@ -27,6 +27,7 @@ import {
 import Markdown from "react-native-markdown-display";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { auth, db } from "../firebaseConfig";
+import { Colors, Radius, Shadows } from "../constants/design-tokens";
 
 type RecipeItem = {
   id: string;
@@ -135,10 +136,10 @@ export default function SearchPortalScreen() {
   const [keyword, setKeyword] = useState("");
   const [results, setResults] = useState<RecipeItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"all" | "saved" | "global">("all");
   const [hasSearched, setHasSearched] = useState(false);
 
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
+  const [recentChefs, setRecentChefs] = useState<string[]>([]);
   const [selectedRecipe, setSelectedRecipe] = useState<RecipeItem | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
 
@@ -173,6 +174,10 @@ export default function SearchPortalScreen() {
       if (historyRaw) {
         setSearchHistory(JSON.parse(historyRaw));
       }
+      const chefsRaw = await AsyncStorage.getItem("cookdex_recent_chefs");
+      if (chefsRaw) {
+        setRecentChefs(JSON.parse(chefsRaw));
+      }
     };
     loadData();
   }, []);
@@ -202,6 +207,14 @@ export default function SearchPortalScreen() {
     await AsyncStorage.removeItem("cookdex_search_history");
   };
 
+  const saveViewedChef = async (name?: string) => {
+    if (!name) return;
+    let updated = [name, ...recentChefs.filter((c) => c !== name)];
+    if (updated.length > 10) updated = updated.slice(0, 10);
+    setRecentChefs(updated);
+    await AsyncStorage.setItem("cookdex_recent_chefs", JSON.stringify(updated));
+  };
+
   const handleSearch = async (searchTerm = keyword) => {
     const term = searchTerm.trim();
     if (!term) return;
@@ -216,57 +229,55 @@ export default function SearchPortalScreen() {
     try {
       let combinedResults: RecipeItem[] = [];
 
-      if (activeTab === "all" || activeTab === "saved") {
-        const savedRaw = await AsyncStorage.getItem("cookdex_saved_recipes");
-        const savedRecipes = savedRaw ? JSON.parse(savedRaw) : [];
-        const filteredSaved = savedRecipes.filter((r: { content?: string }) =>
-          r.content?.includes(term),
-        );
-        combinedResults = [
-          ...combinedResults,
-          ...filteredSaved.map((r: RecipeItem) => ({
-            ...r,
-            source: "내 주방 🍳",
-            isLocal: true,
-          })),
-        ];
-      }
-
-      if (activeTab === "all" || activeTab === "global") {
-        let globalData: RecipeItem[] = [];
-        try {
-          const recipesRef = collection(db, "global_recipes");
-          const q = query(recipesRef, orderBy("createdAt", "desc"), limit(50));
-          const querySnapshot = await getDocs(q);
-          querySnapshot.forEach((doc) => {
-            const data = doc.data();
-            if (data.content?.includes(term)) {
-              globalData.push({
-                id: doc.id,
-                ...data,
-                source: "요리 광장 🌍",
-                isLocal: false,
-              } as RecipeItem);
-            }
-          });
-        } catch (e) {
-          console.log("DB 검색 실패 (오프라인 또는 권한 문제)");
-        }
-
-        const dummyResults = DUMMY_RECIPES.filter((r) =>
-          r.content.includes(term),
-        ).map((r) => ({
+      // 내 주방에서 검색
+      const savedRaw = await AsyncStorage.getItem("cookdex_saved_recipes");
+      const savedRecipes = savedRaw ? JSON.parse(savedRaw) : [];
+      const filteredSaved = savedRecipes.filter((r: { content?: string }) =>
+        r.content?.includes(term),
+      );
+      combinedResults = [
+        ...combinedResults,
+        ...filteredSaved.map((r: RecipeItem) => ({
           ...r,
-          source: "요리 광장 🌍 (테스트)",
-          isLocal: false,
-        }));
+          source: "내 주방 🍳",
+          isLocal: true,
+        })),
+      ];
 
-        const existingIds = new Set(globalData.map((r) => r.id));
-        dummyResults.forEach((r) => {
-          if (!existingIds.has(r.id)) globalData.push(r);
+      // 요리 광장(실제 + 더미)에서 검색
+      let globalData: RecipeItem[] = [];
+      try {
+        const recipesRef = collection(db, "global_recipes");
+        const q = query(recipesRef, orderBy("createdAt", "desc"), limit(50));
+        const querySnapshot = await getDocs(q);
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data.content?.includes(term)) {
+            globalData.push({
+              id: doc.id,
+              ...data,
+              source: "요리 광장 🌍",
+              isLocal: false,
+            } as RecipeItem);
+          }
         });
-        combinedResults = [...combinedResults, ...globalData];
+      } catch (e) {
+        console.log("DB 검색 실패 (오프라인 또는 권한 문제)");
       }
+
+      const dummyResults = DUMMY_RECIPES.filter((r) =>
+        r.content.includes(term),
+      ).map((r) => ({
+        ...r,
+        source: "요리 광장 🌍 (테스트)",
+        isLocal: false,
+      }));
+
+      const existingIds = new Set(globalData.map((r) => r.id));
+      dummyResults.forEach((r) => {
+        if (!existingIds.has(r.id)) globalData.push(r);
+      });
+      combinedResults = [...combinedResults, ...globalData];
 
       if (applyProfileFilter) {
         combinedResults = combinedResults.sort((a, b) => {
@@ -298,6 +309,9 @@ export default function SearchPortalScreen() {
   const openRecipeDetail = (recipe: RecipeItem) => {
     setSelectedRecipe(recipe);
     setModalVisible(true);
+    if (recipe.authorName) {
+      saveViewedChef(recipe.authorName);
+    }
   };
 
   const startCookingMode = () => {
@@ -422,54 +436,6 @@ export default function SearchPortalScreen() {
       </View>
 
       <View style={styles.filterRow}>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            activeTab === "all" && styles.filterChipActive,
-          ]}
-          onPress={() => setActiveTab("all")}
-        >
-          <Text
-            style={[
-              styles.filterText,
-              activeTab === "all" && styles.filterTextActive,
-            ]}
-          >
-            전체
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            activeTab === "saved" && styles.filterChipActive,
-          ]}
-          onPress={() => setActiveTab("saved")}
-        >
-          <Text
-            style={[
-              styles.filterText,
-              activeTab === "saved" && styles.filterTextActive,
-            ]}
-          >
-            내 주방
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            activeTab === "global" && styles.filterChipActive,
-          ]}
-          onPress={() => setActiveTab("global")}
-        >
-          <Text
-            style={[
-              styles.filterText,
-              activeTab === "global" && styles.filterTextActive,
-            ]}
-          >
-            요리 광장
-          </Text>
-        </TouchableOpacity>
         <View style={{ flex: 1 }} />
         <TouchableOpacity
           style={[
@@ -481,10 +447,10 @@ export default function SearchPortalScreen() {
           <Text
             style={[
               styles.profileFilterText,
-              applyProfileFilter && { color: "#fff" },
+              applyProfileFilter && styles.profileFilterTextActive,
             ]}
           >
-            🛡️ 안심 필터 {applyProfileFilter ? "ON" : "OFF"}
+            안심 필터 {applyProfileFilter ? "ON" : "OFF"}
           </Text>
         </TouchableOpacity>
       </View>
@@ -525,6 +491,24 @@ export default function SearchPortalScreen() {
                               <Text style={styles.deleteHistoryText}>✕</Text>
                             </TouchableOpacity>
                           </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+                  {recentChefs.length > 0 && (
+                    <View style={styles.recentChefContainer}>
+                      <View style={styles.recentChefHeader}>
+                        <Text style={styles.recentChefTitle}>👨‍🍳 최근 본 셰프</Text>
+                      </View>
+                      <View style={styles.recentChefTags}>
+                        {recentChefs.map((name, index) => (
+                          <TouchableOpacity
+                            key={index}
+                            style={styles.recentChefTag}
+                            onPress={() => handleSearch(name)}
+                          >
+                            <Text style={styles.recentChefTagText}>{name} 셰프</Text>
+                          </TouchableOpacity>
                         ))}
                       </View>
                     </View>
@@ -696,98 +680,100 @@ const markdownStyles = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#2A2421" },
-  header: { flexDirection: "row", alignItems: "center", padding: 15, gap: 10 },
+  container: { flex: 1, backgroundColor: Colors.bgMain },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 10,
+    gap: 10,
+    backgroundColor: Colors.bgMain,
+  },
   backBtn: { padding: 10 },
-  backBtnText: { color: "#FFFDF9", fontSize: 20 },
+  backBtnText: { color: Colors.textMain, fontSize: 20 },
   searchBarWrapper: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#3A322F",
-    borderRadius: 12,
+    backgroundColor: Colors.bgElevated,
+    borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: "#5A4E49",
+    borderColor: Colors.border,
     paddingRight: 10,
+    ...Shadows.soft,
   },
   searchInput: {
     flex: 1,
-    color: "#FFFDF9",
+    color: Colors.textMain,
     padding: 12,
     fontSize: 16,
   },
   searchBtn: {
-    backgroundColor: "#FF8C00",
+    backgroundColor: Colors.primary,
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 12,
   },
-  searchBtnText: { color: "#000", fontWeight: "bold" },
+  searchBtnText: { color: Colors.textInverse, fontWeight: "bold" },
   clearSearchBtn: { padding: 5 },
-  clearSearchText: { color: "#A89F9C", fontSize: 16, fontWeight: "bold" },
+  clearSearchText: { color: Colors.textSub, fontSize: 16, fontWeight: "bold" },
   filterRow: {
     flexDirection: "row",
-    paddingHorizontal: 15,
-    paddingBottom: 15,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
     gap: 8,
     alignItems: "center",
+    backgroundColor: Colors.bgMain,
   },
-  filterChip: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
-    backgroundColor: "#3A322F",
-    borderWidth: 1,
-    borderColor: "#5A4E49",
-  },
-  filterChipActive: { backgroundColor: "#FF8C00", borderColor: "#FF8C00" },
-  filterText: { color: "#A89F9C", fontSize: 13, fontWeight: "bold" },
-  filterTextActive: { color: "#000" },
   profileFilterBtn: {
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#4CAF50",
+    borderColor: Colors.primary,
+    minWidth: 120,
+    alignItems: "center",
   },
-  profileFilterBtnActive: { backgroundColor: "#4CAF50" },
-  profileFilterText: { color: "#4CAF50", fontSize: 12, fontWeight: "bold" },
-  listContent: { padding: 15 },
-  centerBox: { flex: 1, alignItems: "center", marginTop: 20 },
+  profileFilterBtnActive: {},
+  profileFilterText: { color: Colors.primary, fontSize: 12, fontWeight: "bold" },
+  profileFilterTextActive: { color: Colors.primary },
+  listContent: { paddingHorizontal: 16, paddingBottom: 24 },
+  centerBox: { flex: 1, alignItems: "center", marginTop: 20, paddingHorizontal: 16 },
   emptyText: {
-    color: "#8C7A76",
+    color: Colors.textSub,
     fontSize: 16,
     fontWeight: "bold",
     marginTop: 30,
   },
-  filterInfo: { color: "#4CAF50", fontSize: 12, marginTop: 10 },
-  historyContainer: { width: "100%", paddingHorizontal: 10, marginBottom: 30 },
+  filterInfo: { color: Colors.success, fontSize: 12, marginTop: 10 },
+  historyContainer: { width: "100%", paddingHorizontal: 4, marginBottom: 24 },
   historyHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 10,
   },
-  historyTitle: { color: "#A89F9C", fontSize: 14, fontWeight: "bold" },
-  clearHistoryText: { color: "#FF6B6B", fontSize: 12 },
+  historyTitle: { color: Colors.textSub, fontSize: 14, fontWeight: "bold" },
+  clearHistoryText: { color: Colors.actionDelete, fontSize: 12 },
   historyTags: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   historyTag: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#3A322F",
+    backgroundColor: Colors.bgElevated,
     paddingVertical: 6,
     paddingLeft: 12,
     paddingRight: 6,
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#5A4E49",
+    borderColor: Colors.border,
   },
-  historyTagText: { color: "#FFFDF9", fontSize: 13, marginRight: 5 },
+  historyTagText: { color: Colors.textMain, fontSize: 13, marginRight: 5 },
   deleteHistoryBtn: { padding: 4 },
-  deleteHistoryText: { color: "#A89F9C", fontSize: 12 },
-  popularContainer: { width: "100%", paddingHorizontal: 10 },
+  deleteHistoryText: { color: Colors.textSub, fontSize: 12 },
+  popularContainer: { width: "100%", paddingHorizontal: 4, marginBottom: 24 },
   popularTitle: {
-    color: "#FF8C00",
+    color: Colors.primary,
     fontSize: 16,
     fontWeight: "bold",
     marginBottom: 15,
@@ -800,44 +786,45 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   popularTag: {
-    backgroundColor: "#3A322F",
+    backgroundColor: Colors.bgElevated,
     paddingVertical: 8,
     paddingHorizontal: 15,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#5A4E49",
+    borderColor: Colors.border,
   },
-  popularTagText: { color: "#FFFDF9", fontSize: 14 },
+  popularTagText: { color: Colors.textMain, fontSize: 14 },
   resultCard: {
-    backgroundColor: "#3A322F",
+    backgroundColor: Colors.bgElevated,
     padding: 15,
     borderRadius: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#4A3F3A",
+    borderColor: Colors.border,
+    ...Shadows.soft,
   },
   cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 8,
   },
-  sourceBadge: { color: "#FF8C00", fontSize: 12, fontWeight: "bold" },
-  allergyWarning: { color: "#FF5252", fontSize: 12, fontWeight: "bold" },
+  sourceBadge: { color: Colors.primary, fontSize: 12, fontWeight: "bold" },
+  allergyWarning: { color: Colors.danger, fontSize: 12, fontWeight: "bold" },
   cardTitle: {
-    color: "#FFFDF9",
+    color: Colors.textMain,
     fontSize: 16,
     fontWeight: "bold",
     marginBottom: 4,
   },
-  cardPreview: { color: "#A89F9C", fontSize: 13 },
+  cardPreview: { color: Colors.textSub, fontSize: 13 },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.7)",
+    backgroundColor: Colors.overlayDark,
     justifyContent: "flex-end",
   },
   modalContent: {
     height: "85%",
-    backgroundColor: "#FFFDF9",
+    backgroundColor: Colors.bgModal,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 20,
@@ -849,32 +836,32 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     paddingBottom: 15,
     borderBottomWidth: 1,
-    borderBottomColor: "#E8D5D0",
+    borderBottomColor: Colors.border,
   },
-  modalTitle: { fontSize: 18, fontWeight: "bold", color: "#FF8C00", flex: 1 },
+  modalTitle: { fontSize: 18, fontWeight: "bold", color: Colors.primary, flex: 1 },
   closeModalBtn: { padding: 5 },
-  closeModalText: { color: "#3A2E2B", fontWeight: "bold" },
+  closeModalText: { color: Colors.textMain, fontWeight: "bold" },
   ttsStartBtn: {
-    backgroundColor: "#E3F2FD",
+    backgroundColor: Colors.primarySoft,
     paddingVertical: 15,
     borderRadius: 15,
     alignItems: "center",
     marginBottom: 15,
     borderWidth: 1,
-    borderColor: "#CE93D8",
+    borderColor: Colors.primary,
   },
-  ttsStartBtnText: { color: "#8E24AA", fontSize: 15, fontWeight: "900" },
+  ttsStartBtnText: { color: Colors.primary, fontSize: 15, fontWeight: "900" },
   shoppingBtn: {
-    backgroundColor: "#0073E9",
+    backgroundColor: Colors.actionShop,
     paddingVertical: 16,
     borderRadius: 16,
     alignItems: "center",
     marginTop: 10,
   },
-  shoppingBtnText: { color: "#fff", fontSize: 16, fontWeight: "900" },
+  shoppingBtnText: { color: Colors.textInverse, fontSize: 16, fontWeight: "900" },
   ttsContainer: {
     flex: 1,
-    backgroundColor: "#2A2421",
+    backgroundColor: Colors.bgMain,
     padding: 20,
     justifyContent: "space-between",
   },
@@ -884,14 +871,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 20,
   },
-  ttsStepIndicator: { color: "#FFB347", fontSize: 18, fontWeight: "bold" },
+  ttsStepIndicator: { color: Colors.primary, fontSize: 18, fontWeight: "bold" },
   ttsCloseBtn: {
-    backgroundColor: "rgba(255,255,255,0.2)",
+    backgroundColor: Colors.bgElevated,
     paddingVertical: 8,
     paddingHorizontal: 15,
     borderRadius: 20,
   },
-  ttsCloseBtnText: { color: "#fff", fontWeight: "bold" },
+  ttsCloseBtnText: { color: Colors.textMain, fontWeight: "bold" },
   ttsBody: {
     flex: 1,
     justifyContent: "center",
@@ -899,7 +886,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   ttsBigText: {
-    color: "#FFFDF9",
+    color: Colors.textMain,
     fontSize: 32,
     fontWeight: "900",
     textAlign: "center",
@@ -912,25 +899,22 @@ const styles = StyleSheet.create({
     marginBottom: 40,
   },
   ttsBtn: {
-    backgroundColor: "#4A3F3A",
+    backgroundColor: Colors.bgElevated,
     paddingVertical: 20,
     flex: 1,
     borderRadius: 20,
     alignItems: "center",
     marginHorizontal: 5,
   },
-  ttsBtnText: { color: "#FFFDF9", fontSize: 16, fontWeight: "bold" },
+  ttsBtnText: { color: Colors.textMain, fontSize: 16, fontWeight: "bold" },
   ttsBtnMain: {
-    backgroundColor: "#FF8C00",
+    backgroundColor: Colors.primary,
     paddingVertical: 25,
     flex: 1.5,
     borderRadius: 25,
     alignItems: "center",
     marginHorizontal: 5,
-    shadowColor: "#FF8C00",
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
-    elevation: 5,
+    ...Shadows.glassTight,
   },
-  ttsBtnMainText: { color: "#fff", fontSize: 18, fontWeight: "900" },
+  ttsBtnMainText: { color: Colors.textInverse, fontSize: 18, fontWeight: "900" },
 });
