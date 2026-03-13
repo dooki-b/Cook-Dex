@@ -1521,18 +1521,18 @@ export default function CreateRecipeScreen() {
                                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                                 delayPressIn={0}
                               >
-                                  <Animated.View
-                                    style={[
-                                      styles.curationCard,
-                                      styles.curationCardGlass,
-                                      {
-                                        width: CURATION_CARD_WIDTH,
-                                        height: CURATION_CARD_HEIGHT,
-                                        opacity,
-                                        transform: cardTransform,
-                                      },
-                                    ]}
-                                  >
+                                <Animated.View
+                                  style={[
+                                    styles.curationCard,
+                                    styles.curationCardGlass,
+                                    {
+                                      width: CURATION_CARD_WIDTH,
+                                      height: CURATION_CARD_HEIGHT,
+                                      opacity,
+                                      transform: cardTransform,
+                                    },
+                                  ]}
+                                >
                                   {/* 중앙 카드만 항상 앞/뒤 두 면 마운트 → Reanimated가 애니메이션을 붙일 수 있음. 탭 시 progress만 0→1로 변경 */}
                                   {currentCurationIndex === index ? (
                                     <>

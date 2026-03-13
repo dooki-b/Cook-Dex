@@ -72,7 +72,7 @@ npx expo start
   - Plaza: 상단 검색바 + 아이콘 그리드(명예의 전당→plaza-hof, 랭킹→plaza-ranking, 레시피 분류→categories), 실시간 급상승 5개, 카드 썸네일·별점·후기 수·인분/시간/난이도. 내부 검색/해시태그/탐색 탭 제거.
 - **기능별 구현 정리**  
   - 홈(index): 테마 모달, 3D 큐레이션 카드, 레벨/칭호 뱃지, 상단 검색 버튼(`/search`) 등.
-  - create-recipe: Gemini 연동, 3D Cover Flow, DEV 목업, **맞춤 요리 카드 탭 시 인분 선택**(카드 뒤집기·opacity 크로스페이드, pointerEvents·hitSlop 터치 개선), 완성 레시피에서 **기본 계량 가이드** 버튼 노출, **구조화된 스타일 입력 모달**, 광장 공유 전 `"셰프의 킥!"` 사진·텍스트 입력 모달, 광장용 ID 분리·**릴레이 메타데이터**(relayFromId/relayRootId/relayDepth) 저장 등.
+  - create-recipe: Gemini 연동, 3D Cover Flow, DEV 목업, **맞춤 요리 카드 탭 시 인분 선택**(카드 뒤집기·opacity 크로스페이드, pointerEvents·hitSlop 터치 개선 — 3D rotateY 플립은 플랫폼 이슈로 미도입), 완성 레시피에서 **기본 계량 가이드** 버튼 노출, **구조화된 스타일 입력 모달**, 광장 공유 전 `"셰프의 킥!"` 사진·텍스트 입력 모달, 광장용 ID 분리·**릴레이 메타데이터**(relayFromId/relayRootId/relayDepth) 저장 등.
   - recipe-detail: **릴레이 필드 로드** 및 "해당 요리를 만든 다른 셰프들!"·"릴레이 요리!" 섹션, 릴레이 제작 시 params로 create-recipe 이동.
   - Plaza / Recipes / Quest / Benefits / Scanner: 각 화면 UI 리팩터링(라이트 테마, 카드·버튼 스타일, AR 가이드, 중앙 크롭 등) + **Scanner용 Gemini DEV 목업** 및 create-recipe와 동일한 스타일 입력 모달 재사용.
 
