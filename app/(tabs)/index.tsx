@@ -10,6 +10,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-na
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ClayChipColors, Colors, GlassHighlight, Radius, Shadows } from '../../constants/design-tokens';
 import { auth } from '../../firebaseConfig';
+import BounceButton from '../../components/BounceButton';
 
 // 히어로 버튼 배경 — 로컬 이미지 (채소·재료)
 const HERO_BG_IMAGE = require('../../assets/hero-bg-fresh-vegetables.png');
@@ -308,19 +309,19 @@ export default function HomeScreen() {
                 {useSettingsCondiments && savedCondiments.length > 0 && (
                   <Text style={styles.themeModalHint}>보유 양념/재료: {savedCondiments.slice(0, 5).join(', ')}{savedCondiments.length > 5 ? ' 외 ' + (savedCondiments.length - 5) + '개' : ''}</Text>
                 )}
-                <TouchableOpacity style={styles.themeModalCameraBtn} onPress={goToScannerForTheme}>
+                <BounceButton style={styles.themeModalCameraBtn} onPress={goToScannerForTheme}>
                   <Text style={styles.themeModalCameraText}>📷 카메라로 재료 스캔하기</Text>
-                </TouchableOpacity>
+                </BounceButton>
                 <Text style={styles.themeModalLabel}>직접 입력하여 레시피 만들기</Text>
                 <View style={styles.themeModalChipWrap}>
                   {THEME_MODAL_INGREDIENTS.slice(0, 5).map((ing) => (
-                    <TouchableOpacity
+                    <BounceButton
                       key={ing}
                       style={[styles.themeModalChip, themeModalIngredients.includes(ing) && styles.themeModalChipActive]}
                       onPress={() => toggleThemeModalIngredient(ing)}
                     >
                       <Text style={[styles.themeModalChipText, themeModalIngredients.includes(ing) && styles.themeModalChipTextActive]}>{ing}</Text>
-                    </TouchableOpacity>
+                    </BounceButton>
                   ))}
                 </View>
                 <View style={styles.themeModalInputRow}>

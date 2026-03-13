@@ -10,7 +10,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, Image } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import Animated, { Easing, interpolate, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, interpolate, useAnimatedStyle, useSharedValue, withRepeat, withTiming, withSpring } from 'react-native-reanimated';
 import Markdown from 'react-native-markdown-display';
 import { doc, setDoc } from 'firebase/firestore';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -642,33 +642,41 @@ export default function CreateRecipeScreen() {
   const wave2AnimatedStyle = useAnimatedStyle(() => ({ transform: [{ translateX: wave2Translate.value }] }));
   const wave3AnimatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: wave3Scale.value }] }));
 
-  // 카드 뒤집기(인분 선택): opacity 크로스페이드만 사용 (transform은 부모 cardTransform과 충돌해 미동작 가능성 있음)
-  const cardFlipProgress = useSharedValue(0);
-  const flipEasing = Easing.bezier(0.25, 0.1, 0.25, 1);
+  // 카드 뒤집기(인분 선택): True 3D Flip (앞/뒷면 rotateY 0→180 / 180→360)
+  // 커버플로우 transform은 바깥 카드 컨테이너에만 적용하고,
+  // 이 flipProgress는 "현재 중앙 카드"의 앞/뒷면 회전에만 사용한다.
+  const flipProgress = useSharedValue(0);
+
   const curationCardFrontFaceStyle = useAnimatedStyle(() => {
     'worklet';
-    const p = cardFlipProgress.value;
-    return { opacity: 1 - p };
+    const p = flipProgress.value;
+    const rotateY = interpolate(p, [0, 1], [0, 180]);
+    const zIndex = p < 0.5 ? 2 : 0;
+    return {
+      backfaceVisibility: 'hidden',
+      transform: [
+        { perspective: 1000 }, // 🔥 핵심: 3D 공간감(두께) 개별 부여!
+        { rotateY: `${rotateY}deg` }
+      ],
+      zIndex,
+    };
   });
+
   const curationCardBackFaceStyle = useAnimatedStyle(() => {
     'worklet';
-    const p = cardFlipProgress.value;
-    return { opacity: p };
+    const p = flipProgress.value;
+    // 뒷면은 180~360이 아닌, -180에서 0으로 와야 텍스트가 안 뒤집히고 자연스럽습니다.
+    const rotateY = interpolate(p, [0, 1], [-180, 0]); 
+    const zIndex = p >= 0.5 ? 2 : 0;
+    return {
+      backfaceVisibility: 'hidden',
+      transform: [
+        { perspective: 1000 }, // 🔥 핵심: 뒷면도 3D 공간감 부여!
+        { rotateY: `${rotateY}deg` }
+      ],
+      zIndex,
+    };
   });
-
-  // 플립 연출 시간 (원래대로)
-  const FLIP_OPEN_DURATION = 380;
-  const FLIP_CLOSE_DURATION = 320;
-  const FLIP_CLOSE_DELAY = 340;
-
-  useEffect(() => {
-    if (flippedCardIndex === null) return;
-    cardFlipProgress.value = 0;
-    const id = setTimeout(() => {
-      cardFlipProgress.value = withTiming(1, { duration: FLIP_OPEN_DURATION, easing: flipEasing });
-    }, 80);
-    return () => clearTimeout(id);
-  }, [flippedCardIndex]);
 
   useEffect(() => {
     if (params.preferredStyle) {
@@ -1467,7 +1475,7 @@ export default function CreateRecipeScreen() {
                           if (flippedCardIndex !== null && newIndex !== flippedCardIndex) {
                             setFlippedCardIndex(null);
                             setPendingThemeForServings(null);
-                            cardFlipProgress.value = 0;
+                            flipProgress.value = 0;
                           }
                         }}
                       >
@@ -1516,6 +1524,7 @@ export default function CreateRecipeScreen() {
                                   if (currentCurationIndex !== index) return;
                                   setPendingThemeForServings(theme);
                                   setFlippedCardIndex(index);
+                                  flipProgress.value = withSpring(1, { damping: 15, stiffness: 120 });
                                 }}
                                 activeOpacity={0.9}
                                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -1533,7 +1542,7 @@ export default function CreateRecipeScreen() {
                                     },
                                   ]}
                                 >
-                                  {/* 중앙 카드만 항상 앞/뒤 두 면 마운트 → Reanimated가 애니메이션을 붙일 수 있음. 탭 시 progress만 0→1로 변경 */}
+                                  {/* 중앙 카드만 항상 앞/뒤 두 면 마운트 → Reanimated가 애니메이션을 붙일 수 있음. */}
                                   {currentCurationIndex === index ? (
                                     <>
                                       {/* 앞면: 뒤집힌 상태에선 터치 통과(pointerEvents='none') so 뒷면 버튼이 받음 */}
@@ -1586,7 +1595,7 @@ export default function CreateRecipeScreen() {
                                                   setSelectedServings(v);
                                                   setFlippedCardIndex(null);
                                                   setPendingThemeForServings(null);
-                                                  cardFlipProgress.value = withTiming(0, { duration: FLIP_CLOSE_DURATION, easing: flipEasing });
+                                                  flipProgress.value = withSpring(0, { damping: 15, stiffness: 120 });
                                                   generateFinalRecipe(theme, v);
                                                 }}
                                               >
@@ -1600,7 +1609,7 @@ export default function CreateRecipeScreen() {
                                               setSelectedServings(5);
                                               setFlippedCardIndex(null);
                                               setPendingThemeForServings(null);
-                                              cardFlipProgress.value = withTiming(0, { duration: FLIP_CLOSE_DURATION, easing: flipEasing });
+                                              flipProgress.value = withSpring(0, { damping: 15, stiffness: 120 });
                                               generateFinalRecipe(theme, 5);
                                             }}
                                           >
@@ -1612,7 +1621,7 @@ export default function CreateRecipeScreen() {
                                           onPress={() => {
                                             setFlippedCardIndex(null);
                                             setPendingThemeForServings(null);
-                                            cardFlipProgress.value = withTiming(0, { duration: FLIP_CLOSE_DURATION, easing: flipEasing });
+                                            flipProgress.value = withSpring(0, { damping: 15, stiffness: 120 });
                                           }}
                                         >
                                           <Text style={styles.curationCardBackCancelText}>취소</Text>

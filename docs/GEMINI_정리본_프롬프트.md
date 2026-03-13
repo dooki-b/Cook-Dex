@@ -291,9 +291,8 @@
     - **DEV: 회수 제한·비용 걱정 없이 UI/플로우 테스트**,
     - **PROD: 실제 모델 응답 사용**이 자연스럽게 분리되도록 구현되어 있습니다.
 
-**7-17. 맞춤 요리 카드 인분 선택(카드 뒤집기·opacity 전환·터치 개선) + recipe-detail 릴레이**
-- **create-recipe.tsx**: 카드 탭 시 **뒷면**에 인분 선택(1~4인분 2×2 + "5인분 이상" + 취소). 인분/취소 시 즉시 flippedCardIndex·pendingThemeForServings 초기화. **opacity 크로스페이드만** 사용(앞면 1→0, 뒷면 0→1). 중앙 카드만 앞/뒤 두 면 렌더. 뒤집힌 상태에서 앞면 pointerEvents='none', 뒷면 'box-none'. 카드 TouchableOpacity에 hitSlop·delayPressIn으로 가장자리 탭 인식 개선. 인분 선택 시 generateFinalRecipe(theme, servings), 결과·광장 공유 메타(finalServings 등) 연동.  
-  (3D rotateY 플립은 커버플로우 transform과 함께 썼을 때 카드가 사라져 보이는 문제가 있어, **결론적으로 2D opacity 플립으로 유지**.)
+**7-17. 맞춤 요리 카드 인분 선택(True 3D Flip·터치 개선) + recipe-detail 릴레이**
+- **create-recipe.tsx**: 카드 탭 시 **뒷면**에 인분 선택(1~4인분 2×2 + "5인분 이상" + 취소). 인분/취소 시 즉시 flippedCardIndex·pendingThemeForServings 초기화. 커버플로우용 3D transform은 바깥 카드 컨테이너에 유지하고, 그 안쪽 앞/뒷면 레이어에 `flipProgress` 기반 `rotateY` 0→180 / -180→0 + `perspective: 1000` + `backfaceVisibility: 'hidden'` + zIndex 스위칭을 적용해 **실제 180도 3D 플립** 구현. 중앙 카드만 앞/뒤 두 면 렌더, 뒤집힌 상태에서 앞면 pointerEvents='none', 뒷면 'box-none'. 카드 TouchableOpacity에 hitSlop·delayPressIn으로 가장자리 탭 인식 개선. 인분 선택 시 generateFinalRecipe(theme, servings), 결과·광장 공유 메타(finalServings 등) 연동.
 - **recipe-detail.tsx**: Plaza 로드 시 relayFromId/relayRootId/relayDepth 매핑, "다른 셰프들!"·"릴레이 요리!" 섹션(relayChildren) 표시. 릴레이 제작 시 params로 create-recipe 이동.
 - **create-recipe 광장 공유**: 릴레이 params가 있으면 Firestore 문서에 relay 필드 함께 저장.
 
