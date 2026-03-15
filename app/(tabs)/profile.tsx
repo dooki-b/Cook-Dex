@@ -66,26 +66,58 @@ function DonutChart({ unlocked, total, accentColor, size = 56 }: { unlocked: num
   );
 }
 
+// ====================================================================
+// 🛍️ 별사탁 경제 시스템 — 스킨 카탈로그
+// ====================================================================
+export const SKIN_CATALOG = [
+  {
+    id: 'skin_default',
+    name: '퓨어 화이트',
+    price: 0,
+    colors: ['#FFFFFF', '#F5F5F7'] as [string, string, ...string[]],
+    condition: null, // 모두 무료
+  },
+  {
+    id: 'skin_midnight',
+    name: '미드나이트 블랙',
+    price: 800,
+    colors: ['#1A1A2E', '#16213E', '#0F3460'] as [string, string, ...string[]],
+    condition: null,
+  },
+  {
+    id: 'skin_golden',
+    name: '골든아워',
+    price: 2500,
+    colors: ['#F7971E', '#FFD200', '#F7971E'] as [string, string, ...string[]],
+    condition: '미라클 모닝 셰프', // 원래 칭호 조건
+  },
+] as const;
+
+export type SkinId = typeof SKIN_CATALOG[number]['id'];
+
+/**
+ * 배경색 밝기(YIQ 공식)를 계산하여 텍스트를 기본 흑/흰으로 자동 스위칭합니다.
+ * YIQ 공식 참고: https://www.w3.org/TR/AERT/#color-contrast
+ */
+export function getContrastYIQ(hexColor: string): '#1C1917' | '#FFFFFF' {
+  const hex = hexColor.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  return yiq >= 128 ? '#1C1917' : '#FFFFFF';
+}
+
 /**
  * [기획 가이드 반영] 데이터 수집/생성 시 브랜드명 및 인명 무단 사용 방지용 필터 뼈대
- * 백엔드 전송 전 혹은 화면 표시 전 레시피 타이틀을 정화하는 데 사용합니다.
  */
 const filterTitleForSafety = (title: string): string => {
   if (!title) return title;
   let cleaned = title;
-  
-  // 1. 브랜드명 범용 대체 (예시)
   cleaned = cleaned.replace(/스팸/g, '프레스햄');
   cleaned = cleaned.replace(/너구리/g, '해물라면');
-  
-  // 2. 인명 무단 사용 방지 (예시)
   cleaned = cleaned.replace(/백종원의/g, '셰프의 초간단');
   cleaned = cleaned.replace(/백종원/g, '유명 셰프');
-
-  // Regex 기반으로 더 고도화 할 수 있는 뼈대
-  // const brandRegex = /(스팸|햇반|진라면|신라면)/g;
-  // const personRegex = /(백종원|이연복)/g;
-  
   return cleaned;
 };
 
@@ -112,11 +144,13 @@ export default function ProfileScreen() {
   // 구독 모델 상태
   const [plusModalVisible, setPlusModalVisible] = useState(false);
 
-  // 셰프 카드 상점 모달 및 재화 상태
-  const [designShopVisible, setDesignShopVisible] = useState(false);
-  const [userCoins, setUserCoins] = useState(1500); // 인게임 재화 모형
-  const [unlockedDesigns, setUnlockedDesigns] = useState<string[]>(['기본']);
-  const [selectedDesign, setSelectedDesign] = useState('기본');
+  // 셰프 카드 상점 모달 및 별사탕 경제 상태
+  const [skinShopVisible, setSkinShopVisible] = useState(false);
+  // 🍬 별사탕: 일일 출석+50, 레시피 광장 공유+100, 레벨업 시 레벨*20 지급 (뼈대)
+  const [starCandy, setStarCandy] = useState(1500); // Mock 초기값
+  const [ownedSkins, setOwnedSkins] = useState<SkinId[]>(['skin_default']);
+  const [equippedSkin, setEquippedSkin] = useState<SkinId>('skin_default');
+  const [previewSkin, setPreviewSkin] = useState<SkinId>('skin_default'); // 상점 내 미리보기 스킨
 
   // 식단, 알러지, 양념장 태그용 상태 (하단 섹션 C)
   const [userTags, setUserTags] = useState<string[]>([]);
@@ -135,11 +169,58 @@ export default function ProfileScreen() {
   const currentLevelInfo = calculateLevel(userExp);
   const currentGrade = currentLevelInfo.grade as keyof typeof GRADE_COLORS;
 
-  const getCardColors = (gradeColors: string[]) => {
-    if (selectedDesign === '네온 사이버') return ['#0F2027', '#203A43', '#2C5364'];
-    if (selectedDesign === '프리미엄 블랙') return ['#141414', '#242424', '#000000'];
-    if (selectedDesign === '로즈 골드') return ['#FFF0F3', '#FFCCD5', '#FFF0F3'];
-    return gradeColors;
+  // 현재 장착된 스킨의 그라데이션 컬러 반환
+  const getSkinColors = (skinId: SkinId): [string, string, ...string[]] => {
+    const skin = SKIN_CATALOG.find(s => s.id === skinId);
+    return skin ? skin.colors as [string, string, ...string[]] : SKIN_CATALOG[0].colors as [string, string, ...string[]];
+  };
+
+  // YIQ 기반 텍스트 대비 색 (장착 스킨 기준)
+  const cardTextColor = getContrastYIQ(getSkinColors(equippedSkin)[0]);
+  // 상점 미리보기 텍스트 대비 색
+  const previewTextColor = getContrastYIQ(getSkinColors(previewSkin)[0]);
+
+  // 🍬 별사탕 구매 트랜잭션
+  const handlePurchaseSkin = async (skin: typeof SKIN_CATALOG[number]) => {
+    if (ownedSkins.includes(skin.id as SkinId)) {
+      // 이미 보유 → 장착
+      setEquippedSkin(skin.id as SkinId);
+      setPreviewSkin(skin.id as SkinId);
+      await AsyncStorage.setItem('cookdex_equipped_skin', skin.id);
+      setSkinShopVisible(false);
+      return;
+    }
+    if (skin.price === 0) {
+      setOwnedSkins(prev => [...prev, skin.id as SkinId]);
+      setEquippedSkin(skin.id as SkinId);
+      setPreviewSkin(skin.id as SkinId);
+      await AsyncStorage.setItem('cookdex_equipped_skin', skin.id);
+      setSkinShopVisible(false);
+      return;
+    }
+    if (starCandy < skin.price) {
+      Alert.alert('별사탕 부족 🍬', `별사탕 잔액이 부족합니다!\n필요: ${skin.price}🍬, 보유: ${starCandy}🍬`);
+      return;
+    }
+    Alert.alert(
+      '구매 확인',
+      `${skin.name}을 ${skin.price}🍬으로 구매하시겠습니까?`,
+      [
+        { text: '취소', style: 'cancel' },
+        { text: '구매', onPress: async () => {
+          const newCandy = starCandy - skin.price;
+          setStarCandy(newCandy);
+          setOwnedSkins(prev => [...prev, skin.id as SkinId]);
+          setEquippedSkin(skin.id as SkinId);
+          setPreviewSkin(skin.id as SkinId);
+          // AsyncStorage 저장 (뼈대 — Firestore economy.star_candy 연동 예정)
+          await AsyncStorage.setItem('cookdex_star_candy', newCandy.toString());
+          await AsyncStorage.setItem('cookdex_equipped_skin', skin.id);
+          await AsyncStorage.setItem('cookdex_owned_skins', JSON.stringify([...ownedSkins, skin.id]));
+          setSkinShopVisible(false);
+        }},
+      ]
+    );
   };
 
   const cardFrontFaceStyle = useAnimatedStyle(() => {
@@ -324,7 +405,6 @@ export default function ProfileScreen() {
         >
           <View style={styles.pageHeaderRow}>
             <Text style={styles.pageTitle}>내 정보</Text>
-            <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}><Text style={styles.logoutBtnText}>로그아웃</Text></TouchableOpacity>
           </View>
 
           {/* 🎛️ 통합 대시보드 스택 (단일 구조 그림자) */}
@@ -338,16 +418,15 @@ export default function ProfileScreen() {
                 style={[styles.threeDCard, cardFrontFaceStyle]}
               >
                 <LinearGradient
-                  colors={getCardColors(GRADE_COLORS[currentGrade]) as [string, string, ...string[]]}
+                  colors={getSkinColors(equippedSkin)}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                   style={styles.cardGradient}
                 >
                   <View style={styles.cardGlassOverlay}>
                     <View style={styles.cardHeader}>
-                      <Text style={styles.cardGradeText}>{currentGrade} Grade</Text>
-                      <TouchableOpacity onPress={() => setDesignShopVisible(true)} style={styles.cardShopBtn}>
-                        <Ionicons name="sparkles" size={16} color="#B58268" style={styles.holoSparkle} />
+                      <TouchableOpacity onPress={() => setSkinShopVisible(true)} style={styles.cardShopBtn}>
+                        <Ionicons name="color-palette-outline" size={22} color={cardTextColor} />
                       </TouchableOpacity>
                     </View>
                     <View style={styles.cardBody}>
@@ -374,14 +453,14 @@ export default function ProfileScreen() {
                 style={[styles.threeDCard, cardBackFaceStyle]}
               >
                 <LinearGradient
-                  colors={getCardColors(GRADE_COLORS[currentGrade]) as [string, string, ...string[]]}
+                  colors={getSkinColors(equippedSkin)}
                   start={{ x: 1, y: 1 }}
                   end={{ x: 0, y: 0 }}
                   style={styles.cardGradient}
                 >
                   <View style={styles.cardGlassOverlay}>
                     <View style={styles.cardHeader}>
-                      <Text style={styles.cardGradeText}>{currentGrade} Grade</Text>
+                      <Ionicons name="sync-circle" size={18} color={cardTextColor} style={{ opacity: 0.6 }} />
                     </View>
                     <View style={styles.cardBackStats}>
                       <Text style={styles.statsTitle}>📊 주방 활동 스탯</Text>
@@ -515,10 +594,10 @@ export default function ProfileScreen() {
             <View style={styles.donutGrid}>
               {ARCHIVE_CATEGORIES.map(cat => (
                 <View key={cat.id} style={styles.donutCard}>
-                  <DonutChart unlocked={cat.unlocked} total={cat.total} accentColor={cat.accentColor} size={60} />
+                  <DonutChart unlocked={cat.unlocked} total={cat.total} accentColor={cat.accentColor} size={80} />
                   <Text style={styles.donutCatIcon}>{cat.icon}</Text>
                   <Text style={styles.donutCatTitle}>{cat.title}</Text>
-                  <Text style={styles.donutCatCount}>{cat.unlocked}/{cat.total}</Text>
+                  <Text style={styles.donutCatCount}>{cat.unlocked} / {cat.total}</Text>
                 </View>
               ))}
             </View>
@@ -526,69 +605,87 @@ export default function ProfileScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* 🔮 셰프 카드 디자인 상점 모달 */}
+      {/* 🎨 셰프 카드 코디미기 상점 바텀 시트 */}
       <Modal
-        visible={designShopVisible}
-        transparent={true}
+        visible={skinShopVisible}
+        transparent
         animationType="slide"
-        onRequestClose={() => setDesignShopVisible(false)}
+        onRequestClose={() => { setSkinShopVisible(false); setPreviewSkin(equippedSkin); }}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: '#FFFDF9', borderColor: '#DAA520' }]}>
-            <Text style={[styles.modalTitle, { color: '#B45309' }]}>🎨 셰프 카드 디자인 상점</Text>
-            <Text style={styles.shopCoinText}>소지 코인: {userCoins} 🍪</Text>
-            
-            <View style={styles.shopGrid}>
-              {[
-                { name: '기본', cost: 0, colors: GRADE_COLORS.Gold },
-                { name: '네온 사이버', cost: 500, colors: ['#0F2027', '#203A43', '#2C5364'] },
-                { name: '프리미엄 블랙', cost: 1000, colors: ['#141414', '#242424', '#000000'] },
-                { name: '로즈 골드', cost: 1500, colors: ['#FFF0F3', '#FFCCD5', '#FFF0F3'] }
-              ].map((item) => {
-                const isUnlocked = unlockedDesigns.includes(item.name);
-                const isSelected = selectedDesign === item.name;
+        <TouchableOpacity
+          style={styles.skinShopOverlay}
+          activeOpacity={1}
+          onPress={() => { setSkinShopVisible(false); setPreviewSkin(equippedSkin); }}
+        >
+          <View style={styles.skinShopSheet}>
+            {/* 타이틀 및 별사탕 */}
+            <View style={styles.skinShopHeader}>
+              <Text style={styles.skinShopTitle}>🎨 셰프 카드 꽃디미기 상점</Text>
+              <View style={styles.starCandyBadge}>
+                <Text style={styles.starCandyText}>🍬 {starCandy.toLocaleString()}개</Text>
+              </View>
+            </View>
 
+            {/* 3D 미리보기 카드 */}
+            <View style={styles.skinPreviewWrap}>
+              <LinearGradient
+                colors={getSkinColors(previewSkin)}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                style={styles.skinPreviewCard}
+              >
+                <View style={styles.skinPreviewInner}>
+                  <Text style={[styles.skinPreviewName, { color: previewTextColor }]}>
+                    {user?.email?.split('@')[0] ?? '셀프'} 셰프
+                  </Text>
+                  <Text style={[styles.skinPreviewSub, { color: previewTextColor, opacity: 0.7 }]}>
+                    {SKIN_CATALOG.find(s => s.id === previewSkin)?.name ?? ''} 스킨
+                  </Text>
+                </View>
+              </LinearGradient>
+            </View>
+
+            {/* 스킨 리스트 가로 스크롤 */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.skinListContainer}>
+              {SKIN_CATALOG.map(skin => {
+                const isOwned = ownedSkins.includes(skin.id as SkinId);
+                const isEquipped = equippedSkin === skin.id;
+                const isPreviewing = previewSkin === skin.id;
                 return (
                   <TouchableOpacity
-                    key={item.name}
-                    style={[styles.shopItem, isSelected && { borderWidth: 2, borderColor: '#B45309' }]}
-                    onPress={() => {
-                      if (isUnlocked) {
-                        setSelectedDesign(item.name);
-                        Alert.alert("알림", `${item.name} 디자인이 적용되었습니다.`);
-                      } else {
-                        if (userCoins >= item.cost) {
-                          Alert.alert("구매 확인", `${item.cost} 코인으로 ${item.name}을 구매하시겠습니까?`, [
-                            { text: "취소", style: "cancel" },
-                            { text: "구매", onPress: () => {
-                              setUserCoins(userCoins - item.cost);
-                              setUnlockedDesigns([...unlockedDesigns, item.name]);
-                              Alert.alert("구매 완료", `${item.name} 디자인이 해금되었습니다.`);
-                            }}
-                          ]);
-                        } else {
-                          Alert.alert("코인 부족", "가지고 있는 코인이 부족합니다.");
-                        }
-                      }
-                    }}
+                    key={skin.id}
+                    style={[styles.skinListItem, isPreviewing && styles.skinListItemActive]}
+                    activeOpacity={0.85}
+                    onPress={() => setPreviewSkin(skin.id as SkinId)}
                   >
-                    <LinearGradient colors={item.colors as [string, string, ...string[]]} style={styles.shopItemPreview} />
-                    <Text style={styles.shopItemName}>{item.name}</Text>
-                    <Text style={styles.shopItemCost}>
-                      {isUnlocked ? "해금됨" : `${item.cost} 🍪`}
+                    <LinearGradient
+                      colors={skin.colors as [string, string, ...string[]]}
+                      style={styles.skinListPreview}
+                    />
+                    <Text style={styles.skinListName} numberOfLines={1}>{skin.name}</Text>
+                    <Text style={styles.skinListPrice}>
+                      {isOwned ? (isEquipped ? '✅ 장착중' : '장착하기') : skin.price === 0 ? '무료' : `${skin.price}🍬`}
                     </Text>
                   </TouchableOpacity>
                 );
               })}
-            </View>
+            </ScrollView>
 
-            <TouchableOpacity style={styles.modalBtn} onPress={() => setDesignShopVisible(false)}>
-              <Text style={styles.modalBtnText}>닫기</Text>
+            {/* 구매/장착 버튼 */}
+            <TouchableOpacity
+              style={styles.skinActionBtn}
+              activeOpacity={0.85}
+              onPress={() => {
+                const skin = SKIN_CATALOG.find(s => s.id === previewSkin);
+                if (skin) handlePurchaseSkin(skin);
+              }}
+            >
+              <Text style={styles.skinActionBtnText}>
+                {ownedSkins.includes(previewSkin) ? '💋 이 스킨 장착하기' : `🛒 ${SKIN_CATALOG.find(s => s.id === previewSkin)?.price ?? 0}🍬으로 구매하기`}
+              </Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </TouchableOpacity>
       </Modal>
-
 
 
       {/* 🏅 칭호 변경 모달 */}
@@ -726,19 +823,40 @@ const styles = StyleSheet.create({
   hiddenCategoryBadgeText: { color: '#FFF', fontSize: 9, fontWeight: '900' },
 
   // 도넛 차트 도감 카드
-  donutGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 6 },
-  donutCard: { width: '18%', minWidth: 60, alignItems: 'center', gap: 4 },
-  donutCatIcon: { fontSize: 18 },
-  donutCatTitle: { fontSize: 10, fontWeight: '700', color: Colors.textMain, textAlign: 'center' },
-  donutCatCount: { fontSize: 9, fontWeight: '600', color: Colors.textSub },
+  donutGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 8 },
+  donutCard: { width: '28%', flex: 1, minWidth: 90, backgroundColor: Colors.bgElevated, borderRadius: Radius.lg, paddingVertical: 16, paddingHorizontal: 8, alignItems: 'center', gap: 6, borderWidth: 1, borderColor: Colors.border, ...Shadows.soft },
+  donutCatIcon: { fontSize: 24, marginTop: 2 },
+  donutCatTitle: { fontSize: 13, fontWeight: '800', color: Colors.textMain, textAlign: 'center' },
+  donutCatCount: { fontSize: 11, fontWeight: '700', color: Colors.textSub },
 
-  // Shop Modal Styles
+  // Shop Modal Styles (레거시 호환)
   shopCoinText: { color: '#B45309', fontSize: 14, fontWeight: '800', marginBottom: 20, backgroundColor: 'rgba(218, 165, 32, 0.1)', paddingVertical: 6, paddingHorizontal: 16, borderRadius: Radius.pill },
   shopGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 15, justifyContent: 'center' },
   shopItem: { width: '45%', backgroundColor: '#FFF', borderRadius: Radius.lg, padding: 10, alignItems: 'center', borderWidth: 1, borderColor: '#ECECEC', ...Shadows.soft },
   shopItemPreview: { width: '100%', height: 60, borderRadius: Radius.md, marginBottom: 8 },
   shopItemName: { color: '#3E2723', fontSize: 13, fontWeight: '800', marginBottom: 4 },
   shopItemCost: { color: '#D97706', fontSize: 11, fontWeight: '900' },
+
+  // 🎨 신규 스킨 상점 바텀 시트
+  skinShopOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  skinShopSheet: { backgroundColor: Colors.bgElevated, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 24, paddingHorizontal: 20, paddingBottom: 40, borderWidth: 1, borderColor: Colors.border },
+  skinShopHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  skinShopTitle: { fontSize: 18, fontWeight: '900', color: Colors.textMain },
+  starCandyBadge: { backgroundColor: Colors.primarySoft, paddingHorizontal: 14, paddingVertical: 6, borderRadius: Radius.pill, borderWidth: 1, borderColor: Colors.border },
+  starCandyText: { color: Colors.primary, fontWeight: '800', fontSize: 14 },
+  skinPreviewWrap: { width: '100%', height: 120, borderRadius: Radius.xl, overflow: 'hidden', marginBottom: 20, ...Shadows.soft },
+  skinPreviewCard: { flex: 1, padding: 18, justifyContent: 'flex-end' },
+  skinPreviewInner: {},
+  skinPreviewName: { fontSize: 18, fontWeight: '900' },
+  skinPreviewSub: { fontSize: 12, fontWeight: '600', marginTop: 2 },
+  skinListContainer: { paddingVertical: 4, paddingHorizontal: 2, gap: 12 },
+  skinListItem: { width: 90, borderRadius: Radius.lg, padding: 8, alignItems: 'center', backgroundColor: Colors.bgMain, borderWidth: 1.5, borderColor: Colors.border, gap: 6 },
+  skinListItemActive: { borderColor: Colors.primary, backgroundColor: Colors.primarySoft, ...Shadows.glow },
+  skinListPreview: { width: '100%', height: 52, borderRadius: Radius.md },
+  skinListName: { fontSize: 11, fontWeight: '700', color: Colors.textMain, textAlign: 'center' },
+  skinListPrice: { fontSize: 10, fontWeight: '800', color: Colors.primary },
+  skinActionBtn: { width: '100%', backgroundColor: Colors.primary, paddingVertical: 15, borderRadius: Radius.pill, alignItems: 'center', marginTop: 18, ...Shadows.glow },
+  skinActionBtnText: { color: Colors.textInverse, fontWeight: '900', fontSize: 16 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   modalContent: { backgroundColor: '#2A2421', borderRadius: 24, padding: 25, borderWidth: 1, borderColor: '#FF8C00', width: '100%', alignItems: 'center' },
