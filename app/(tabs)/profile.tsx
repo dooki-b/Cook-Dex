@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { auth } from '../../firebaseConfig';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, interpolate } from 'react-native-reanimated';
+import Svg, { Circle } from 'react-native-svg';
 
 const calculateLevel = (exp: number) => {
   if (exp < 50) return { level: 1, title: "🍳 요리 쪼렙", nextExp: 50, grade: 'Bronze' };
@@ -25,11 +26,45 @@ const GRADE_COLORS = {
 };
 
 const ARCHIVE_CATEGORIES = [
-  { id: 'ko', title: '한식 도감', icon: '🍚', unlocked: 8, total: 30, color: '#FFECB3' },
-  { id: 'we', title: '양식 도감', icon: '🍝', unlocked: 3, total: 20, color: '#C8E6C9' },
-  { id: 'jp', title: '일식 도감', icon: '🍣', unlocked: 2, total: 15, color: '#F8BBD0' },
-  { id: 'survival', title: '자취 서바이벌 🥫', icon: '🔥', unlocked: 5, total: 10, color: '#D1C4E9', isHidden: true },
+  { id: 'category_kr', title: '한식', icon: '🍚', unlocked: 8, total: 30, accentColor: '#FF8C00' },
+  { id: 'category_cn', title: '중식', icon: '🥢', unlocked: 3, total: 25, accentColor: '#E53935' },
+  { id: 'category_wt', title: '양식', icon: '🍝', unlocked: 5, total: 20, accentColor: '#43A047' },
+  { id: 'category_jp', title: '일식', icon: '🍣', unlocked: 2, total: 15, accentColor: '#F44336' },
+  { id: 'category_bk', title: '베이킹', icon: '🍰', unlocked: 1, total: 12, accentColor: '#AB47BC' },
 ];
+
+// 환형 도넷 차트 컴포넌트 (react-native-svg)
+function DonutChart({ unlocked, total, accentColor, size = 56 }: { unlocked: number; total: number; accentColor: string; size?: number }) {
+  const radius = size / 2 - 6;
+  const circumference = 2 * Math.PI * radius;
+  const progress = total > 0 ? unlocked / total : 0;
+  const strokeDashoffset = circumference * (1 - progress);
+  return (
+    <View style={{ width: size, height: size, ...Shadows.soft }}>
+      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        {/* 배경 트랙 */}
+        <Circle
+          cx={size / 2} cy={size / 2} r={radius}
+          strokeWidth={6} stroke={Colors.primarySoft} fill="none"
+          strokeLinecap="round"
+        />
+        {/* 활성 스트로크 */}
+        <Circle
+          cx={size / 2} cy={size / 2} r={radius}
+          strokeWidth={6} stroke={accentColor} fill="none"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+          rotation="-90"
+          origin={`${size / 2}, ${size / 2}`}
+        />
+      </Svg>
+      <View style={{ position: 'absolute', top: 0, left: 0, width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ fontSize: 9, fontWeight: '800', color: accentColor }}>{Math.round(progress * 100)}%</Text>
+      </View>
+    </View>
+  );
+}
 
 /**
  * [기획 가이드 반영] 데이터 수집/생성 시 브랜드명 및 인명 무단 사용 방지용 필터 뼈대
@@ -471,29 +506,20 @@ export default function ProfileScreen() {
             </View>
           </View>
 
-          {/* 🗄️ 도감 섹션 (나의 키친 아카이브) - 하단 배치 */}
+          {/* 🗄️ 도감 섹션 - SVG 도넷 차트 */}
           <View style={[styles.dashboardSection, { marginBottom: 60 }]}>
             <View style={styles.dashboardHeader}>
-              <Text style={styles.dashboardTitle}>나의 키친 아카이브 (도감)</Text>
+              <Text style={styles.dashboardTitle}>🗄️ 키친 도감</Text>
+              <Text style={styles.dashboardActionText}>보유 {ARCHIVE_CATEGORIES.reduce((s, c) => s + c.unlocked, 0)} / {ARCHIVE_CATEGORIES.reduce((s, c) => s + c.total, 0)}</Text>
             </View>
-            <View style={styles.archiveGrid}>
-              {ARCHIVE_CATEGORIES.map((cat) => (
-                <TouchableOpacity 
-                  key={cat.id} 
-                  style={[styles.archiveItem, { backgroundColor: cat.color }]}
-                  activeOpacity={0.8}
-                >
-                  {cat.isHidden && (
-                    <View style={styles.hiddenCategoryBadge}>
-                      <Text style={styles.hiddenCategoryBadgeText}>Secret</Text>
-                    </View>
-                  )}
-                  <Text style={styles.archiveIcon}>{cat.icon}</Text>
-                  <View style={{ flex: 1, justifyContent: 'center' }}>
-                    <Text style={styles.archiveTitle} numberOfLines={1}>{cat.title}</Text>
-                    <Text style={styles.archiveCount}>{cat.unlocked} / {cat.total}</Text>
-                  </View>
-                </TouchableOpacity>
+            <View style={styles.donutGrid}>
+              {ARCHIVE_CATEGORIES.map(cat => (
+                <View key={cat.id} style={styles.donutCard}>
+                  <DonutChart unlocked={cat.unlocked} total={cat.total} accentColor={cat.accentColor} size={60} />
+                  <Text style={styles.donutCatIcon}>{cat.icon}</Text>
+                  <Text style={styles.donutCatTitle}>{cat.title}</Text>
+                  <Text style={styles.donutCatCount}>{cat.unlocked}/{cat.total}</Text>
+                </View>
               ))}
             </View>
           </View>
@@ -690,7 +716,7 @@ const styles = StyleSheet.create({
   identityTagEmpty: { backgroundColor: Colors.bgElevated, padding: 16, borderRadius: Radius.lg, width: '100%', alignItems: 'center' },
   identityTagEmptyText: { fontSize: 13, color: Colors.textSub },
 
-  // Archive Grid Styles
+  // Archive Grid Styles (기존 호환 유지)
   archiveGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   archiveItem: { width: '48%', borderRadius: Radius.lg, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, ...Shadows.soft, elevation: 1 },
   archiveIcon: { fontSize: 32 },
@@ -698,6 +724,13 @@ const styles = StyleSheet.create({
   archiveCount: { fontSize: 12, fontWeight: '700', color: '#666', backgroundColor: 'rgba(255,255,255,0.4)', paddingVertical: 2, paddingHorizontal: 6, borderRadius: 4, alignSelf: 'flex-start' },
   hiddenCategoryBadge: { position: 'absolute', top: -5, right: -5, backgroundColor: '#E25822', paddingVertical: 2, paddingHorizontal: 6, borderRadius: 4 },
   hiddenCategoryBadgeText: { color: '#FFF', fontSize: 9, fontWeight: '900' },
+
+  // 도넛 차트 도감 카드
+  donutGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 6 },
+  donutCard: { width: '18%', minWidth: 60, alignItems: 'center', gap: 4 },
+  donutCatIcon: { fontSize: 18 },
+  donutCatTitle: { fontSize: 10, fontWeight: '700', color: Colors.textMain, textAlign: 'center' },
+  donutCatCount: { fontSize: 9, fontWeight: '600', color: Colors.textSub },
 
   // Shop Modal Styles
   shopCoinText: { color: '#B45309', fontSize: 14, fontWeight: '800', marginBottom: 20, backgroundColor: 'rgba(218, 165, 32, 0.1)', paddingVertical: 6, paddingHorizontal: 16, borderRadius: Radius.pill },

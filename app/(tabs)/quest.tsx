@@ -7,18 +7,60 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { db } from '../../firebaseConfig';
 import { Colors, Radius, Shadows } from '../../constants/design-tokens';
 
+// ====================================================================
+// 🎮 EXP 밸런스 공식: 100 * (level ^ 1.8) — 최대 레벨 999
+// ====================================================================
+export const expForLevel = (level: number): number =>
+  level <= 1 ? 0 : Math.floor(100 * Math.pow(level, 1.8));
+
+export const calculateLevel = (totalExp: number): { level: number; title: string; currentLevelExp: number; nextLevelExp: number } => {
+  let level = 1;
+  while (level < 999 && totalExp >= expForLevel(level + 1)) level++;
+  const TITLES: Record<number, string> = {
+    1: '🥄 요리 초급', 5: '🍳 견습 요리사', 10: '👨‍🍳 수석 셰프', 20: '🌟 마스터 셰프', 50: '🏆 전설의 셰프', 100: '🔱 요리의 신'
+  };
+  const titleKey = Object.keys(TITLES).map(Number).filter(k => k <= level).pop() ?? 1;
+  return { level, title: TITLES[titleKey], currentLevelExp: expForLevel(level), nextLevelExp: expForLevel(level + 1) };
+};
+
 const INITIAL_MISSIONS = [
   { id: 'm1', text: '오늘의 주방 입장 (출석)', exp: 10, isCompleted: true, isClaimed: false },
   { id: 'm2', text: 'AI 레시피 1회 생성하기', exp: 20, isCompleted: false, isClaimed: false },
   { id: 'm3', text: '식재료 AI 스캔 1회 하기', exp: 30, isCompleted: false, isClaimed: false },
 ];
 
-const calculateLevel = (exp: number) => {
-  if (exp < 50) return { level: 1, title: "요리 초급", nextExp: 50 };
-  if (exp < 150) return { level: 2, title: "견습 요리사", nextExp: 150 };
-  if (exp < 500) return { level: 3, title: "수석 셰프", nextExp: 500 };
-  return { level: 'MAX', title: "마스터 셰프", nextExp: exp };
-};
+// ====================================================================
+// 🏅 업적(Achievement) 데이터 정의
+// ====================================================================
+const ACHIEVEMENTS = [
+  {
+    id: 'ach_miracle',
+    icon: '🌞',
+    name: '미라클 모닝 셰프',
+    condition: '오전 5:00~8:30 사이 아침 식사 레시피 요리 인증 3회',
+    reward: "'갓생 셰프' 에픽 칭호 + 골드 에그 타이머 UI 프레임 (+200 EXP)",
+    maxProgress: 3,
+    storageKey: 'ach_miracle_progress',
+  },
+  {
+    id: 'ach_egg',
+    icon: '🍳',
+    name: '계란 애호가 (에그 마스터)',
+    condition: "주 재료 '계란'을 활용한 서로 다른 조리법 요리 5종 완성",
+    reward: "'단백질 수호자' 칭호 + 황금 프라이팬 이펙트 해금 (+150 EXP)",
+    maxProgress: 5,
+    storageKey: 'ach_egg_progress',
+  },
+  {
+    id: 'ach_fridge',
+    icon: '🧊',
+    name: '냉장고 구출 작전',
+    condition: "AI 스캔으로 '유통기한 임박' 또는 '자투리 채소' 3종 이상 조합 요리 1회",
+    reward: "'지구방위대 셰프' 히든 뱃지 + 무료 룰렛 티켓 1장 (+300 EXP)",
+    maxProgress: 1,
+    storageKey: 'ach_fridge_progress',
+  },
+];
 
 export default function QuestScreen() {
   const router = useRouter();
@@ -30,6 +72,11 @@ export default function QuestScreen() {
   const [isExpBuffActive, setIsExpBuffActive] = useState(false);
   const [mockAdPlaying, setMockAdPlaying] = useState(false);
   const [adCountdown, setAdCountdown] = useState(3);
+
+  // 🏅 업적 진행도 상태 (Mock 초기값)
+  const [achProgress, setAchProgress] = useState<Record<string, number>>({});
+  const [selectedAch, setSelectedAch] = useState<typeof ACHIEVEMENTS[0] | null>(null);
+  const [achModalVisible, setAchModalVisible] = useState(false);
 
   // 🗳️ 투표 시스템 상태 (New)
   const [votingData, setVotingData] = useState<any[]>([]);
@@ -117,6 +164,14 @@ export default function QuestScreen() {
             await AsyncStorage.setItem('cookdex_daily_missions', JSON.stringify({ date: new Date().toLocaleDateString(), data: INITIAL_MISSIONS }));
           }
 
+          // 🏅 업적 진행도 로드 (AsyncStorage Mock)
+          const progressMap: Record<string, number> = {};
+          for (const ach of ACHIEVEMENTS) {
+            const raw = await AsyncStorage.getItem(ach.storageKey);
+            progressMap[ach.id] = raw ? parseInt(raw) : 0;
+          }
+          setAchProgress(progressMap);
+
           setIsLoading(false);
         } catch (error) {
           setIsLoading(false);
@@ -179,6 +234,36 @@ export default function QuestScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+
+        {/* 🏅 업적 보드 */}
+        <View style={styles.achSection}>
+          <Text style={styles.sectionTitle}>🏅 업적 / 히든 도전</Text>
+          <Text style={styles.sectionSub}>조건을 달성하면 특별 보상을 획득합니다!</Text>
+          <View style={styles.achGrid}>
+            {ACHIEVEMENTS.map(ach => {
+              const progress = achProgress[ach.id] ?? 0;
+              const isUnlocked = progress >= ach.maxProgress;
+              return (
+                <TouchableOpacity
+                  key={ach.id}
+                  style={[styles.achBadge, isUnlocked ? styles.achBadgeUnlocked : styles.achBadgeLocked]}
+                  activeOpacity={0.8}
+                  onPress={() => { setSelectedAch(ach); setAchModalVisible(true); }}
+                >
+                  <View style={styles.achIconWrap}>
+                    <Text style={[styles.achIcon, !isUnlocked && { opacity: 0.4 }]}>{ach.icon}</Text>
+                    {!isUnlocked && <Text style={styles.achLockOverlay}>🔒</Text>}
+                  </View>
+                  <Text style={[styles.achName, !isUnlocked && { opacity: 0.4, color: Colors.textSub }]} numberOfLines={2}>{ach.name}</Text>
+                  <View style={styles.achProgressBarBg}>
+                    <View style={[styles.achProgressBarFill, { width: `${Math.min(100, (progress / ach.maxProgress) * 100)}%`, opacity: isUnlocked ? 1 : 0.5 }]} />
+                  </View>
+                  <Text style={[styles.achProgressText, !isUnlocked && { opacity: 0.4 }]}>{Math.min(progress, ach.maxProgress)} / {ach.maxProgress}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
 
         {/* 행운의 룰렛 메가 버튼 */}
         <TouchableOpacity 
@@ -280,8 +365,35 @@ export default function QuestScreen() {
 
       </ScrollView>
 
-      {/* 삭제된 모달 위치 */}
+      {/* 🏅 업적 상세 바텀 시트 모달 */}
+      <Modal visible={achModalVisible} transparent animationType="slide" onRequestClose={() => setAchModalVisible(false)}>
+        <TouchableOpacity style={styles.achModalOverlay} activeOpacity={1} onPress={() => setAchModalVisible(false)}>
+          <View style={styles.achModalSheet}>
+            {selectedAch && (
+              <>
+                <Text style={styles.achModalIcon}>{selectedAch.icon}</Text>
+                <Text style={styles.achModalName}>{selectedAch.name}</Text>
+                <View style={styles.achModalDivider} />
+                <Text style={styles.achModalLabel}>달성 조건</Text>
+                <Text style={styles.achModalValue}>{selectedAch.condition}</Text>
+                <View style={{ height: 12 }} />
+                <Text style={styles.achModalLabel}>달성 보상</Text>
+                <Text style={styles.achModalValue}>{selectedAch.reward}</Text>
+                <View style={{ height: 20 }} />
+                <View style={styles.achProgressBarBg}>
+                  <View style={[styles.achProgressBarFill, { width: `${Math.min(100, ((achProgress[selectedAch.id] ?? 0) / selectedAch.maxProgress) * 100)}%` }]} />
+                </View>
+                <Text style={[styles.achProgressText, { textAlign: 'center', marginTop: 6 }]}>{achProgress[selectedAch.id] ?? 0} / {selectedAch.maxProgress} 진행 중</Text>
+              </>
+            )}
+            <TouchableOpacity style={styles.achModalCloseBtn} onPress={() => setAchModalVisible(false)}>
+              <Text style={styles.achModalCloseBtnText}>닫기</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
+      {/* 기존 Mock 광고 모달 */}
       <Modal visible={mockAdPlaying} transparent={false} animationType="slide">
         <View style={styles.mockAdContainer}>
           <Text style={styles.mockAdTitle}>스폰서 광고 재생 중...</Text>
@@ -295,41 +407,37 @@ export default function QuestScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.bgMain,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'android' ? 32 : 16,
-    paddingBottom: 12,
-    backgroundColor: Colors.bgMain,
-  },
-  backBtn: {
-    backgroundColor: Colors.bgElevated,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  backBtnText: {
-    color: Colors.textSub,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  pageTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: Colors.textMain,
-  },
-  scrollContent: {
-    padding: 20,
-    paddingBottom: 100,
-  },
+  container: { flex: 1, backgroundColor: Colors.bgMain },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: Platform.OS === 'android' ? 32 : 16, paddingBottom: 12, backgroundColor: Colors.bgMain },
+  backBtn: { backgroundColor: Colors.bgElevated, paddingVertical: 8, paddingHorizontal: 12, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border },
+  backBtnText: { color: Colors.textSub, fontSize: 13, fontWeight: '600' },
+  pageTitle: { fontSize: 20, fontWeight: '900', color: Colors.textMain },
+  scrollContent: { padding: 20, paddingBottom: 100 },
+
+  // 업적 보드
+  achSection: { backgroundColor: Colors.bgElevated, borderRadius: Radius.xl, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: Colors.border, ...Shadows.soft },
+  achGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 8 },
+  achBadge: { width: '29%', minHeight: 120, borderRadius: Radius.lg, padding: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5 },
+  achBadgeUnlocked: { backgroundColor: Colors.primarySoft, borderColor: Colors.primary, ...Shadows.glow },
+  achBadgeLocked: { backgroundColor: Colors.bgMuted, borderColor: Colors.border },
+  achIconWrap: { position: 'relative', alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  achIcon: { fontSize: 32 },
+  achLockOverlay: { position: 'absolute', bottom: -4, right: -6, fontSize: 14, opacity: 0.6 },
+  achName: { fontSize: 11, fontWeight: '700', color: Colors.textMain, textAlign: 'center', marginBottom: 8, lineHeight: 15 },
+  achProgressBarBg: { width: '100%', height: 4, backgroundColor: Colors.bgMain, borderRadius: 2, overflow: 'hidden' },
+  achProgressBarFill: { height: '100%', backgroundColor: Colors.primary, borderRadius: 2 },
+  achProgressText: { fontSize: 10, color: Colors.textSub, marginTop: 4, fontWeight: '600' },
+
+  // 업적 바텀 시트 모달
+  achModalOverlay: { flex: 1, backgroundColor: Colors.overlayDark, justifyContent: 'flex-end' },
+  achModalSheet: { backgroundColor: Colors.bgModal, borderTopLeftRadius: Radius.xl, borderTopRightRadius: Radius.xl, padding: 28, paddingBottom: 48, alignItems: 'center', borderWidth: 1, borderColor: Colors.border },
+  achModalIcon: { fontSize: 48, marginBottom: 10 },
+  achModalName: { fontSize: 20, fontWeight: '900', color: Colors.textMain, textAlign: 'center', marginBottom: 16 },
+  achModalDivider: { width: '100%', height: 1, backgroundColor: Colors.border, marginBottom: 16 },
+  achModalLabel: { fontSize: 12, fontWeight: '800', color: Colors.primary, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6, alignSelf: 'flex-start' },
+  achModalValue: { fontSize: 14, color: Colors.textMain, lineHeight: 20, alignSelf: 'flex-start' },
+  achModalCloseBtn: { marginTop: 20, backgroundColor: Colors.primary, paddingVertical: 14, paddingHorizontal: 40, borderRadius: Radius.pill },
+  achModalCloseBtnText: { color: Colors.textInverse, fontWeight: '900', fontSize: 15 },
 
   profileCard: {
     backgroundColor: Colors.bgElevated,
