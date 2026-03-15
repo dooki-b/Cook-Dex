@@ -296,6 +296,15 @@
 - **recipe-detail.tsx**: Plaza 로드 시 relayFromId/relayRootId/relayDepth 매핑, "다른 셰프들!"·"릴레이 요리!" 섹션(relayChildren) 표시. 릴레이 제작 시 params로 create-recipe 이동.
 - **create-recipe 광장 공유**: 릴레이 params가 있으면 Firestore 문서에 relay 필드 함께 저장.
 
+**7-18. 3D 홀로그램 셰프 카드 & 스택 레벨바 부착형 디자인 고도화**
+- **profile.tsx (내 정보)**: 
+  - 카드 터치 시 **180도 smooth flip** 애니메이션 (`withSpring`, `perspective: 1000`, `rotateY` 트릭). Android `pointerEvents` 가림막 전담 제어.
+  - 뒷면 스탯 가독성 전면 개선: 테이블형 리스트로 정렬하고 우측 하단 `sync-circle`로 미니멀 명함 룩을 탔습니다.
+- **셰프 카드 디자인 상점**:
+  - 상단 `별` 아이콘으로 연결되는 커스텀 디자인 `Modal` 개장. 인게임 가상 재화 교환(`coins`) 및 해금 preview 동기화.
+- **슬림 레벨 바 부착형**:
+  - 기존의 대시보드 부자연스러운 box 레이아웃을 걷어내고, 카드 하단에 단차 없이 밀착 결합시킨 **`attachedLevelBar`**로 묶어 연속성을 높였습니다.
+
 이제 [여기에 Gemini에게 요청할 구체적인 작업 내용을 적어 주세요.]
 ```
 

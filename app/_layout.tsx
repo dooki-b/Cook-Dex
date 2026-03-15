@@ -41,8 +41,8 @@ export default function RootLayout() {
     if (!user && inTabsGroup) {
       router.replace('/login');
     } 
-    // 🚨 치명적 에러 해결: 스캐너(scanner) 화면일 때는 홈으로 튕겨내지 않도록 예외 처리 추가!!
-    else if (user && segments[0] !== '(tabs)' && segments[0] !== 'scanner' && segments[0] !== 'create-recipe' && segments[0] !== 'tutorial' && segments[0] !== 'benefits' && segments[0] !== 'search' && segments[0] !== 'recipe-detail' && segments[0] !== 'plaza-hof' && segments[0] !== 'plaza-ranking' && segments[0] !== 'categories') {
+    // 🚨 치명적 에러 해결: 스캐너(scanner), 설정(settings), 유저검색(search_user) 화면일 때는 홈으로 튕겨내지 않도록 예외 처리 추가!!
+    else if (user && segments[0] !== '(tabs)' && segments[0] !== 'scanner' && segments[0] !== 'create-recipe' && segments[0] !== 'tutorial' && segments[0] !== 'benefits' && segments[0] !== 'search' && segments[0] !== 'recipe-detail' && segments[0] !== 'plaza-hof' && segments[0] !== 'plaza-ranking' && segments[0] !== 'categories' && segments[0] !== 'settings' && segments[0] !== 'search_user') {
       router.replace('/(tabs)');
     }
   }, [user, isInitializing, segments]);

@@ -5,10 +5,10 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Dimensions, ImageBackground, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
+import { Alert, Dimensions, ImageBackground, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableWithoutFeedback, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ClayChipColors, Colors, GlassHighlight, Radius, Shadows } from '../../constants/design-tokens';
+import { Colors, GlassHighlight, Radius, Shadows } from '../../constants/design-tokens';
 import { auth } from '../../firebaseConfig';
 import BounceButton from '../../components/BounceButton';
 
@@ -41,11 +41,11 @@ function Squishable({
   );
 }
 
-// 퀵 메뉴 칩 (클레이모피즘 아이콘 + 라벨)
+// 퀵 메뉴 칩 (모던 컬러 액센트)
 const QUICK_MENU = [
-  { id: 'mission', label: '미션', icon: 'flag-outline' as const, color: ClayChipColors.blue, onPress: 'quest' },
-  { id: 'kitchen', label: '내 주방', icon: 'restaurant-outline' as const, color: ClayChipColors.yellow, onPress: 'recipes' },
-  { id: 'sale', label: '할인정보', icon: 'pricetag-outline' as const, color: ClayChipColors.peach, onPress: 'benefits' },
+  { id: 'mission', label: '미션', icon: 'flag-outline' as const, color: '#3B82F6', onPress: 'quest' },
+  { id: 'kitchen', label: '내 주방', icon: 'restaurant-outline' as const, color: '#F59E0B', onPress: 'recipes' },
+  { id: 'sale', label: '할인정보', icon: 'pricetag-outline' as const, color: '#EC4899', onPress: 'benefits' },
 ];
 
 // 테마 풀: 식단 목표·시간대에 따라 추천 조합용 + Unsplash 이미지
@@ -273,9 +273,9 @@ export default function HomeScreen() {
               </View>
               <Text style={styles.legalFooter}>위 사항 무시로 인한 피해에 대해 앱 개발자는 법적 책임을 지지 않습니다.</Text>
             </ScrollView>
-            <TouchableOpacity style={styles.legalAgreeBtn} onPress={handleAgreeLegal}>
+            <BounceButton style={styles.legalAgreeBtn} onPress={handleAgreeLegal}>
               <Text style={styles.legalAgreeBtnText}>동의합니다</Text>
-            </TouchableOpacity>
+            </BounceButton>
           </View>
         </View>
       </Modal>
@@ -287,9 +287,9 @@ export default function HomeScreen() {
             <TouchableWithoutFeedback onPress={() => {}}>
               <View style={styles.themeModalContent}>
             <View style={styles.themeModalHeader}>
-              <TouchableOpacity onPress={closeThemeModal} hitSlop={12}>
+              <BounceButton onPress={closeThemeModal}>
                 <Text style={styles.themeModalClose}>✕</Text>
-              </TouchableOpacity>
+              </BounceButton>
               <Text style={styles.themeModalTitle} numberOfLines={1}>
                 {selectedThemeForModal?.title}으로 추천받기
               </Text>
@@ -333,22 +333,22 @@ export default function HomeScreen() {
                     onChangeText={setThemeModalInput}
                     onSubmitEditing={addThemeModalCustomIngredient}
                   />
-                  <TouchableOpacity style={styles.themeModalAddBtn} onPress={addThemeModalCustomIngredient}>
+                  <BounceButton style={styles.themeModalAddBtn} onPress={addThemeModalCustomIngredient}>
                     <Text style={styles.themeModalAddBtnText}>추가</Text>
-                  </TouchableOpacity>
+                  </BounceButton>
                 </View>
                 {themeModalIngredients.length > 0 && (
                   <View style={styles.themeModalSelectedWrap}>
                     {themeModalIngredients.map((ing) => (
-                      <TouchableOpacity key={ing} style={styles.themeModalSelectedChip} onPress={() => toggleThemeModalIngredient(ing)}>
+                      <BounceButton key={ing} style={styles.themeModalSelectedChip} onPress={() => toggleThemeModalIngredient(ing)}>
                         <Text style={styles.themeModalSelectedText}>{ing} ✕</Text>
-                      </TouchableOpacity>
+                      </BounceButton>
                     ))}
                   </View>
                 )}
-                <TouchableOpacity style={styles.themeModalSubmitBtn} onPress={submitThemeRecommend}>
+                <BounceButton style={styles.themeModalSubmitBtn} onPress={submitThemeRecommend}>
                   <Text style={styles.themeModalSubmitText}>3가지 레시피 추천받기</Text>
-                </TouchableOpacity>
+                </BounceButton>
               </ScrollView>
             </KeyboardAvoidingView>
               </View>
@@ -396,10 +396,6 @@ export default function HomeScreen() {
               <View style={styles.headerRight}>
                 {(() => {
                   const levelInfo = calculateLevel(userExp);
-                  const progressPercent = Math.max(
-                    0,
-                    Math.min(100, Math.round((userExp / levelInfo.nextExp) * 100)),
-                  );
                   return (
                     <View style={styles.levelBadgeWrap}>
                       <View style={styles.levelBadgeOuter}>
@@ -420,10 +416,11 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            {/* 검색창 — 탭 시 Search(레시피 검색) 화면으로 이동 */}
-            <TouchableOpacity style={[styles.searchBar, styles.glassCard]} activeOpacity={0.9} onPress={() => router.push('/search')}>
+            {/* 검색창 — 탭 시 Search(레시피 검색) 화면으로 이동 (초모던 카카오 스타일) */}
+            <BounceButton style={styles.searchBarModern} onPress={() => router.push('/search')}>
+              <Ionicons name="search" size={20} color={Colors.textSub} style={{ marginRight: 8 }} />
               <Text style={styles.searchPlaceholder}>재료나 요리명 검색</Text>
-            </TouchableOpacity>
+            </BounceButton>
 
             {/* 오늘 냉장고 파먹기 (메인 CTA) — 배경 이미지 + 가독성 오버레이 */}
             <View style={styles.section}>
@@ -462,17 +459,12 @@ export default function HomeScreen() {
                     style={[styles.heroCtaSmallTouch, styles.heroCtaSmallShadowTight]}
                     onPress={() => goQuickMenu(item.onPress)}
                   >
-                    <View style={[styles.heroCtaSmallInner, GlassHighlight]}>
+                    <View style={[GlassHighlight, styles.heroCtaSmallInner, { borderLeftColor: item.color }]}>
                       <BlurView intensity={50} tint="light" style={StyleSheet.absoluteFill} />
-                      <LinearGradient
-                        colors={[item.color, Colors.bgElevated]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={StyleSheet.absoluteFill}
-                      />
+                      <View style={{...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(255,255,255,0.7)'}} />
                       <View style={styles.heroCtaSmall}>
                         <View style={[styles.heroCtaSmallIconWrap, styles.heroCtaSmallIconWrapTinted]}>
-                          <Ionicons name={item.icon} size={20} color={Colors.textMain} />
+                          <Ionicons name={item.icon} size={20} color={item.color} />
                         </View>
                         <Text style={styles.heroCtaSmallTitleTinted} numberOfLines={2}>{item.label}</Text>
                       </View>
@@ -488,17 +480,12 @@ export default function HomeScreen() {
                     style={[styles.heroCtaSmallTouch, styles.heroCtaSmallShadowTight]}
                     onPress={() => goQuickMenu(item.onPress)}
                   >
-                    <View style={[styles.heroCtaSmallInner, GlassHighlight]}>
+                    <View style={[GlassHighlight, styles.heroCtaSmallInner, { borderLeftColor: item.color }]}>
                       <BlurView intensity={50} tint="light" style={StyleSheet.absoluteFill} />
-                      <LinearGradient
-                        colors={[item.color, Colors.bgElevated]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={StyleSheet.absoluteFill}
-                      />
+                      <View style={{...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(255,255,255,0.7)'}} />
                       <View style={styles.heroCtaSmall}>
                         <View style={[styles.heroCtaSmallIconWrap, styles.heroCtaSmallIconWrapTinted]}>
-                          <Ionicons name={item.icon} size={20} color={Colors.textMain} />
+                          <Ionicons name={item.icon} size={20} color={item.color} />
                         </View>
                         <Text style={styles.heroCtaSmallTitleTinted} numberOfLines={2}>{item.label}</Text>
                       </View>
@@ -521,10 +508,9 @@ export default function HomeScreen() {
               decelerationRate="fast"
             >
               {recommendedThemes.slice(0, 6).map((theme) => (
-                <TouchableOpacity
+                <BounceButton
                   key={theme.id}
                   style={[styles.themeCard, { width: THEME_CARD_WIDTH, marginRight: THEME_CARD_MARGIN }]}
-                  activeOpacity={0.95}
                   onPress={() => openThemeModal(theme)}
                 >
                   <ImageBackground
@@ -539,7 +525,7 @@ export default function HomeScreen() {
                     />
                     <Text style={styles.themeCardTitle}>{theme.title}</Text>
                   </ImageBackground>
-                </TouchableOpacity>
+                </BounceButton>
               ))}
             </ScrollView>
           </View>
@@ -584,7 +570,19 @@ const styles = StyleSheet.create({
     paddingRight: 12,
   },
   headerRight: {
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  headerIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.bgElevated,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.05)',
   },
   logo: {
     fontSize: 28,
@@ -673,18 +671,22 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 4,
   },
-  searchBar: {
+  searchBarModern: {
     height: 52,
-    borderRadius: Radius.lg,
+    borderRadius: 26,
     paddingHorizontal: 20,
-    justifyContent: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 24,
-    borderWidth: 0,
-    borderColor: 'transparent',
+    backgroundColor: '#FFFFFF', // 모던 화이트 느낌
+    marginHorizontal: 20,
+    ...Shadows.glass,
   },
   searchPlaceholder: {
     fontSize: 15,
     color: Colors.textSub,
+    marginLeft: 8,
+    fontWeight: '500',
   },
   section: {
     marginBottom: 24,
@@ -792,6 +794,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     overflow: 'hidden',
     minHeight: 60,
+    borderLeftWidth: 6,
   },
   heroCtaSmall: {
     borderRadius: Radius.md,

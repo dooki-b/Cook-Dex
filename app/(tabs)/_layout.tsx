@@ -1,17 +1,18 @@
 import { Tabs, useRouter } from 'expo-router';
-import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword } from 'firebase/auth';
+import { User, createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword } from 'firebase/auth';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { auth } from '../../firebaseConfig';
 import { Colors, Radius, Shadows } from '../../constants/design-tokens';
+import BounceButton from '../../components/BounceButton';
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [isInitializing, setIsInitializing] = useState(true);
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState<User | null>(null);
   
   // 로그인 폼 상태
   const [email, setEmail] = useState("");
@@ -31,7 +32,7 @@ export default function TabLayout() {
     setIsLoginLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
-    } catch (error) { Alert.alert("로그인 실패", "이메일이나 비밀번호를 확인해주세요."); } 
+    } catch (_) { Alert.alert("로그인 실패", "이메일이나 비밀번호를 확인해주세요."); }
     finally { setIsLoginLoading(false); }
   };
 
@@ -42,11 +43,11 @@ export default function TabLayout() {
     try {
       await createUserWithEmailAndPassword(auth, email, password);
       Alert.alert("가입 완료! 🎉", "쿡덱스의 셰프가 되신 것을 환영합니다.");
-    } catch (error) { Alert.alert("회원가입 실패", error.message); } 
+    } catch (error: any) { Alert.alert("회원가입 실패", error.message); }
     finally { setIsLoginLoading(false); }
   };
 
-  const handleSocialMock = (provider) => {
+  const handleSocialMock = (provider: string) => {
     Alert.alert("안내", `${provider} 소셜 로그인은 구글/애플 개발자 콘솔 세팅이 완료되는 스토어 등록 직전에 연동됩니다. 현재는 이메일 로그인을 이용해주세요!`);
   };
 
@@ -131,6 +132,7 @@ export default function TabLayout() {
       tabBarShowLabel: true,
       tabBarLabelStyle: { fontSize: 11, fontWeight: 'bold', paddingBottom: 5 },
       tabBarHideOnKeyboard: true,
+      tabBarButton: (props) => <BounceButton {...props} />,
       tabBarStyle: [
         styles.tabBar,
         {
@@ -163,14 +165,13 @@ export default function TabLayout() {
           title: '레시피 제작',
           tabBarButton: (props) => (
             <View style={styles.centerFabWrapper}>
-              <TouchableOpacity
-                activeOpacity={0.9}
+              <BounceButton
                 style={styles.centerFab}
                 onPress={() => router.push('/create-recipe')}
               >
                 <Ionicons name="add" size={28} color={Colors.textInverse} />
                 <Text style={styles.centerFabLabel}>레시피 제작</Text>
-              </TouchableOpacity>
+              </BounceButton>
             </View>
           ),
         }}
@@ -179,8 +180,11 @@ export default function TabLayout() {
       <Tabs.Screen
         name="profile"
         options={{
-          title: '내 설정',
-          tabBarIcon: ({ color, size }) => <Ionicons name="person-outline" size={size} color={color} />,
+          title: '내 정보',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'person' : 'person-outline'} size={24} color={color} />
+          ),
+          tabBarButton: (props) => <BounceButton {...props} />,
         }}
       />
       {/* 5. 전체 메뉴 */}

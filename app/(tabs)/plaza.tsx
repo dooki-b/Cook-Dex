@@ -259,8 +259,13 @@ export default function PlazaScreen() {
           <Text style={styles.headerTitle}>요리 광장</Text>
           <Text style={styles.headerSub}>셰프들의 AI 레시피 피드</Text>
         </View>
-        <View style={styles.limitBadge}>
-          <Text style={styles.limitBadgeText}>오늘 열람: {isProUser ? '무제한' : `${plazaViewsLeft}회 남음`}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <TouchableOpacity onPress={() => router.push('/search_user')} style={{ padding: 4 }}>
+            <Ionicons name="search" size={24} color={Colors.textMain} />
+          </TouchableOpacity>
+          <View style={styles.limitBadge}>
+            <Text style={styles.limitBadgeText}>오늘 열람: {isProUser ? '무제한' : `${plazaViewsLeft}회 남음`}</Text>
+          </View>
         </View>
       </View>
 
@@ -407,8 +412,8 @@ export default function PlazaScreen() {
                           <Text style={[styles.authorName, (item.likes ?? 0) >= 10 && { color: Colors.textInverse }]}>{item.authorName}</Text>
                         </View>
                         {item.authorTitle && (
-                          <View style={styles.authorBadge}>
-                            <Text style={styles.authorBadgeText}>{item.authorTitle}</Text>
+                          <View style={styles.authorBadgeModern}>
+                            <Text style={styles.authorBadgeTextModern}>{item.authorTitle}</Text>
                           </View>
                         )}
                         {isFilterActive && matchCount > 0 && (
@@ -700,8 +705,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bgElevated,
     borderRadius: Radius.xl,
     marginBottom: 18,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderLeftWidth: 5,
+    borderLeftColor: Colors.primary,
     overflow: 'hidden',
     ...Shadows.soft,
   },
@@ -754,17 +759,21 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 12,
   },
-  authorBadge: {
+  authorBadgeModern: {
     marginLeft: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: Radius.sm,
-    backgroundColor: Colors.bgMuted,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    backgroundColor: '#FFF7ED', // 옅은 주황 바탕
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: '#FED7AA', // 주황색 얇은 테두리
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  authorBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: Colors.textSub,
+  authorBadgeTextModern: {
+    fontSize: 11,
+    color: '#EA580C', // 진한 주황 텍스트
+    fontWeight: '800',
   },
   ratingChip: {
     flexDirection: 'row',
@@ -1188,8 +1197,8 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: Radius.lg,
     width: 160,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.primary,
     ...Shadows.glass,
   },
   rankingBadge: {

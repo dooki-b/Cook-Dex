@@ -13,7 +13,7 @@ const INITIAL_MISSIONS = [
   { id: 'm3', text: '식재료 AI 스캔 1회 하기', exp: 30, isCompleted: false, isClaimed: false },
 ];
 
-const calculateLevel = (exp) => {
+const calculateLevel = (exp: number) => {
   if (exp < 50) return { level: 1, title: "요리 초급", nextExp: 50 };
   if (exp < 150) return { level: 2, title: "견습 요리사", nextExp: 150 };
   if (exp < 500) return { level: 3, title: "수석 셰프", nextExp: 500 };
@@ -27,16 +27,12 @@ export default function QuestScreen() {
   // 🎮 게이미피케이션 상태
   const [userExp, setUserExp] = useState(0);
   const [missions, setMissions] = useState(INITIAL_MISSIONS);
-  const [equippedTitle, setEquippedTitle] = useState("요리 초급");
-  const [unlockedTitles, setUnlockedTitles] = useState(["요리 초급"]);
-  
-  const [titleModalVisible, setTitleModalVisible] = useState(false);
   const [isExpBuffActive, setIsExpBuffActive] = useState(false);
   const [mockAdPlaying, setMockAdPlaying] = useState(false);
   const [adCountdown, setAdCountdown] = useState(3);
 
   // 🗳️ 투표 시스템 상태 (New)
-  const [votingData, setVotingData] = useState([]);
+  const [votingData, setVotingData] = useState<any[]>([]);
 
   useEffect(() => {
     const fetchValidationData = async () => {
@@ -54,7 +50,7 @@ export default function QuestScreen() {
   const SCREEN_WIDTH = Dimensions.get('window').width;
   const swipePosition = useRef(new Animated.ValueXY()).current;
   
-  const handleSwipeComplete = async (isCorrect) => {
+  const handleSwipeComplete = async (isCorrect: boolean) => {
     const currentItem = votingData[0];
     if(currentItem) {
       try {
@@ -105,12 +101,6 @@ export default function QuestScreen() {
           const currentExp = expRaw ? parseInt(expRaw) : 0;
           setUserExp(currentExp);
 
-          const savedTitle = await AsyncStorage.getItem('cookdex_equipped_title');
-          if (savedTitle) setEquippedTitle(savedTitle);
-
-          const savedUnlocked = await AsyncStorage.getItem('cookdex_unlocked_titles');
-          if (savedUnlocked) setUnlockedTitles(JSON.parse(savedUnlocked));
-
           const buffData = await AsyncStorage.getItem('cookdex_exp_buff_date');
           if (buffData === new Date().toLocaleDateString()) setIsExpBuffActive(true);
 
@@ -136,16 +126,9 @@ export default function QuestScreen() {
     }, [])
   );
 
-  const checkAndUnlockTitles = async (newTitle, currentUnlocked) => {
-    if (!currentUnlocked.includes(newTitle)) {
-      const updatedTitles = [...currentUnlocked, newTitle];
-      setUnlockedTitles(updatedTitles);
-      await AsyncStorage.setItem('cookdex_unlocked_titles', JSON.stringify(updatedTitles));
-      Alert.alert("새로운 칭호 획득", `[${newTitle}] 칭호가 해금되었습니다. 장착해보세요.`);
-    }
-  };
+  // 칭호 해금 로직 삭제됨
 
-  const claimMissionReward = async (missionId, baseExp) => {
+  const claimMissionReward = async (missionId: string, baseExp: number) => {
     const earnedExp = isExpBuffActive ? baseExp * 2 : baseExp;
     const newExp = userExp + earnedExp;
     setUserExp(newExp);
@@ -155,8 +138,6 @@ export default function QuestScreen() {
     setMissions(updatedMissions);
     await AsyncStorage.setItem('cookdex_daily_missions', JSON.stringify({ date: new Date().toLocaleDateString(), data: updatedMissions }));
 
-    const levelInfo = calculateLevel(newExp);
-    checkAndUnlockTitles(levelInfo.title, unlockedTitles);
     Alert.alert("미션 달성", `${earnedExp} EXP를 획득했습니다. ${isExpBuffActive ? '(버프 2배 적용)' : ''}`);
   };
 
@@ -177,11 +158,7 @@ export default function QuestScreen() {
     }, 1000);
   };
 
-  const handleEquipTitle = async (title) => {
-    setEquippedTitle(title);
-    setTitleModalVisible(false);
-    await AsyncStorage.setItem('cookdex_equipped_title', title);
-  };
+  // 칭호 장착 로직 삭제됨
 
   if (isLoading) {
     return (
@@ -190,9 +167,6 @@ export default function QuestScreen() {
       </View>
     );
   }
-
-  const currentLevelInfo = calculateLevel(userExp);
-  const expProgress = currentLevelInfo.level === 'MAX' ? 100 : (userExp / currentLevelInfo.nextExp) * 100;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -205,27 +179,6 @@ export default function QuestScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        
-        <View style={styles.profileCard}>
-          <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start'}}>
-            <View>
-              <Text style={styles.equippedTitleBadge}>{equippedTitle}</Text>
-              <Text style={styles.userName}>나의 요리 등급</Text>
-            </View>
-            <TouchableOpacity style={styles.changeTitleBtn} onPress={() => setTitleModalVisible(true)}>
-              <Text style={styles.changeTitleBtnText}>칭호 변경</Text>
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.levelHeader}>
-            <Text style={styles.levelTitle}>
-              Lv.{currentLevelInfo.level}{' '}
-              {isExpBuffActive && <Text style={styles.levelBuffText}>(EXP 2배 버프 중)</Text>}
-            </Text>
-            <Text style={styles.expText}>{userExp} / {currentLevelInfo.level === 'MAX' ? 'MAX' : currentLevelInfo.nextExp} EXP</Text>
-          </View>
-          <View style={styles.progressBarBg}><View style={[styles.progressBarFill, { width: `${expProgress}%` }]} /></View>
-        </View>
 
         {/* 행운의 룰렛 메가 버튼 */}
         <TouchableOpacity 
@@ -293,7 +246,7 @@ export default function QuestScreen() {
               ]}
             >
               <Text style={styles.voteQuestion}>
-                이 항목이 '{votingData[0].proposedName}'입니까?
+                이 항목이 &apos;{votingData[0].proposedName}&apos;입니까?
               </Text>
               <Text style={styles.voteHint}>카드를 좌우로 스와이프하거나 아래 버튼을 눌러 주세요.</Text>
             </Animated.View>
@@ -327,23 +280,7 @@ export default function QuestScreen() {
 
       </ScrollView>
 
-      <Modal visible={titleModalVisible} transparent={true} animationType="slide" onRequestClose={() => setTitleModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>내 칭호 장착함</Text>
-            <Text style={styles.modalSub}>해금된 칭호를 선택하여 뽐내보세요!</Text>
-            <ScrollView style={{width: '100%', maxHeight: 300}}>
-              {unlockedTitles.map(title => (
-                <TouchableOpacity key={title} style={[styles.titleOption, equippedTitle === title && {borderColor: '#FF8C00', backgroundColor: '#4A3F3A'}]} onPress={() => handleEquipTitle(title)}>
-                  <Text style={[styles.titleOptionText, equippedTitle === title && {color: '#FF8C00', fontWeight: 'bold'}]}>{title} {equippedTitle === title && "✓"}</Text>
-                </TouchableOpacity>
-              ))}
-              <View style={[styles.titleOption, {opacity: 0.5}]}><Text style={styles.titleOptionText}>??? (비밀 조건 달성 시 해금) 🔒</Text></View>
-            </ScrollView>
-            <TouchableOpacity style={styles.closeModalBtn} onPress={() => setTitleModalVisible(false)}><Text style={styles.closeModalBtnText}>닫기</Text></TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* 삭제된 모달 위치 */}
 
       <Modal visible={mockAdPlaying} transparent={false} animationType="slide">
         <View style={styles.mockAdContainer}>

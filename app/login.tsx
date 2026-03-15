@@ -8,6 +8,7 @@ import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, StyleSheet, T
 import { auth, db } from '../firebaseConfig';
 
 const SAFE_NICKNAMES = ["예: 마늘 다지는 곰돌이", "예: 방구석 미슐랭", "예: 파송송 계란탁", "예: 후라이팬 요정", "예: 불맛 마스터"];
+const BAD_WORDS = ["시발", "씨발", "병신", "개새끼", "좆", "지랄", "애미", "창녀", "새끼", "미친", "존나", "졸라"];
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -37,6 +38,15 @@ export default function LoginScreen() {
         await signInWithEmailAndPassword(auth, email, password);
       } else {
         if (!nickname) { Alert.alert("알림", "멋진 셰프 닉네임을 지어주세요!"); setIsLoading(false); return; }
+        
+        // 🚨 불건전 닉네임 필터링
+        const hasBadWord = BAD_WORDS.some(word => nickname.includes(word));
+        if (hasBadWord) {
+          Alert.alert("알림", "사용할 수 없는 단어가 포함되어 있습니다. 건전한 닉네임을 입력해주세요.");
+          setIsLoading(false);
+          return;
+        }
+
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(userCredential.user, { displayName: nickname });
         await setDoc(doc(db, "users", userCredential.user.uid), {
