@@ -72,10 +72,10 @@ npx expo start
   - Plaza: 상단 검색바 + 아이콘 그리드(명예의 전당→plaza-hof, 랭킹→plaza-ranking, 레시피 분류→categories), 실시간 급상승 5개, 카드 썸네일·별점·후기 수·인분/시간/난이도. 내부 검색/해시태그/탐색 탭 제거.
 - **기능별 구현 정리**  
   - 홈(index): 테마 모달, 3D 큐레이션 카드, 레벨/칭호 뱃지, 상단 검색 버튼(`/search`), 테마 모달 내 버튼들에 통통 튀는 공통 마이크로 인터랙션(`BounceButton`) 시범 적용 등.
-  - 프로필(profile): **3D 홀로그램 셰프 카드** (perspective: 1000, flip animations, `withSpring` 관성 터치 완전 안정화), **디자인 상점**(`Modal` 기반 코인 프리미엄 스킨 해금 preview), **슬림 레벨 바**(`attachedLevelBar` 하단 단차 연속 밀착 결합 마감) 추가 등.
+  - 프로필(profile): **3D 홀로그램 셰프 카드** (`perspective: 1000`, `withSpring` 완전 안정화), **별사탕 상점**(`bag-handle-outline` 진입, `SKIN_CATALOG` 3종 바텀 시트 라이브 프리뷰), **대비 로직**(`getContrastYIQ` 실시간 폰트 색 역배색), **키친 도감**(`react-native-svg` 도넛 차트 기반 5구역 컬렉션 3열 카드 가시화), 슬림 레벨 바 단차 부착 마감 등.
   - create-recipe: Gemini 연동, 3D Cover Flow, DEV 목업, **맞춤 요리 카드 탭 시 인분 선택**(커버플로우는 유지한 채 중앙 카드만 True 3D Flip으로 앞/뒷면 180도 회전, pointerEvents·hitSlop 터치 개선), 완성 레시피에서 **기본 계량 가이드** 버튼 노출, **구조화된 스타일 입력 모달**, 광장 공유 전 `"셰프의 킥!"` 사진·텍스트 입력 모달, 광장용 ID 분리·**릴레이 메타데이터**(relayFromId/relayRootId/relayDepth) 저장 등.
   - recipe-detail: **릴레이 필드 로드** 및 "해당 요리를 만든 다른 셰프들!"·"릴레이 요리!" 섹션, 릴레이 제작 시 params로 create-recipe 이동.
-  - Plaza / Recipes / Quest / Benefits / Scanner: 각 화면 UI 리팩터링(라이트 테마, 카드·버튼 스타일, AR 가이드, 중앙 크롭 등) + **Scanner용 Gemini DEV 목업** 및 create-recipe와 동일한 스타일 입력 모달 재사용.
+  - Plaza / Recipes / Quest / Benefits / Scanner: 각 화면 UI 리팩터링 + **Quest 신규 EXP 공식 및 업적 보드**(해금 뱃지 Shadows.glow 분기 처리), **Scanner용 Gemini DEV 목업** 탑재 등.
 
 > **TIP**: 새 작업자는 먼저 `docs/백업용_프롬프트.md` 전체를 읽어 구조를 이해하고,  
 > 이후 실제 Gemini 작업 시 `docs/GEMINI_정리본_프롬프트.md`를 그대로 복사해 붙여넣으면 됩니다.

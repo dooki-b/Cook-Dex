@@ -424,25 +424,26 @@ export default function ProfileScreen() {
                   style={styles.cardGradient}
                 >
                   <View style={styles.cardGlassOverlay}>
-                    <View style={styles.cardHeader}>
+                    {/* 카드 헤더: 좌측 빈 공간 + 우측 팔레트 버튼 */}
+                    <View style={[styles.cardHeader, { justifyContent: 'flex-end' }]}>
                       <TouchableOpacity onPress={() => setSkinShopVisible(true)} style={styles.cardShopBtn}>
-                        <Ionicons name="color-palette-outline" size={22} color={cardTextColor} />
+                        <Ionicons name="bag-handle-outline" size={22} color={cardTextColor} />
                       </TouchableOpacity>
                     </View>
                     <View style={styles.cardBody}>
                       <View style={styles.modernAvatarWrap}>
-                        <Text style={styles.modernAvatarText}>{(user?.email?.[0] || '?').toUpperCase()}</Text>
+                        <Text style={[styles.modernAvatarText, { color: cardTextColor }]}>{(user?.email?.[0] || '?').toUpperCase()}</Text>
                         <View style={styles.modernAvatarBadge}>
                           <Text style={styles.modernAvatarBadgeText}>👑</Text>
                         </View>
                       </View>
                       <View style={{ flex: 1, marginLeft: 16 }}>
-                        <Text style={styles.cardTitle}>{equippedTitle}</Text>
-                        <Text style={styles.cardUserName}>{user?.email?.split('@')[0] || '익명'}</Text>
-                        <Text style={styles.cardUserLevel}>Lv.{currentLevelInfo.level}</Text>
+                        <Text style={[styles.cardTitle, { color: cardTextColor, opacity: 0.7 }]}>{equippedTitle}</Text>
+                        <Text style={[styles.cardUserName, { color: cardTextColor }]}>{user?.email?.split('@')[0] || '익명'}</Text>
+                        <Text style={[styles.cardUserLevel, { color: cardTextColor, opacity: 0.8 }]}>Lv.{currentLevelInfo.level}</Text>
                       </View>
                     </View>
-                    <Ionicons name="sync-circle" size={24} color="#8A5A44" style={styles.cardFlipIcon} />
+                    <Ionicons name="sync-circle" size={24} color={cardTextColor} style={[styles.cardFlipIcon, { opacity: 0.4 }]} />
                   </View>
                 </LinearGradient>
               </Animated.View>
@@ -459,25 +460,24 @@ export default function ProfileScreen() {
                   style={styles.cardGradient}
                 >
                   <View style={styles.cardGlassOverlay}>
-                    <View style={styles.cardHeader}>
-                      <Ionicons name="sync-circle" size={18} color={cardTextColor} style={{ opacity: 0.6 }} />
-                    </View>
+                    {/* 뒷면: 헤더 아이콘 없음 */}
+                    <View style={styles.cardHeader} />
                     <View style={styles.cardBackStats}>
-                      <Text style={styles.statsTitle}>📊 주방 활동 스탯</Text>
+                      <Text style={[styles.statsTitle, { color: cardTextColor }]}>📊 주방 활동 스탯</Text>
                       <View style={styles.statsRow}>
-                        <Text style={styles.statsLabel}>총 경험치</Text>
-                        <Text style={styles.statsValue}>{userExp} EXP</Text>
+                        <Text style={[styles.statsLabel, { color: cardTextColor, opacity: 0.7 }]}>총 경험치</Text>
+                        <Text style={[styles.statsValue, { color: cardTextColor }]}>{userExp} EXP</Text>
                       </View>
                       <View style={styles.statsRow}>
-                        <Text style={styles.statsLabel}>해금 칭호</Text>
-                        <Text style={styles.statsValue}>{unlockedTitles.length} 개</Text>
+                        <Text style={[styles.statsLabel, { color: cardTextColor, opacity: 0.7 }]}>해금 칭호</Text>
+                        <Text style={[styles.statsValue, { color: cardTextColor }]}>{unlockedTitles.length} 개</Text>
                       </View>
                       <View style={[styles.statsRow, { borderBottomWidth: 0 }]}>
-                        <Text style={styles.statsLabel}>선호 테마</Text>
-                        <Text style={styles.statsValue}>{userTags.length > 0 ? userTags[0] : '미설정'}</Text>
+                        <Text style={[styles.statsLabel, { color: cardTextColor, opacity: 0.7 }]}>선호 테마</Text>
+                        <Text style={[styles.statsValue, { color: cardTextColor }]}>{userTags.length > 0 ? userTags[0] : '미설정'}</Text>
                       </View>
                     </View>
-                    <Ionicons name="sync-circle" size={24} color="#8A5A44" style={styles.cardFlipIcon} />
+                    <Ionicons name="sync-circle" size={24} color={cardTextColor} style={[styles.cardFlipIcon, { opacity: 0.4 }]} />
                   </View>
                 </LinearGradient>
               </Animated.View>
@@ -767,14 +767,14 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   cardGradeText: { color: '#8A5A44', fontSize: 11, fontWeight: '800', letterSpacing: 0.8, opacity: 0.8 },
   holoSparkle: { opacity: 0.6 },
-  cardBody: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  cardBody: { flexDirection: 'row', alignItems: 'center', flex: 1, marginBottom: 14 },
   cardTitle: { color: '#8A5A44', fontSize: 13, fontWeight: '700', letterSpacing: 0.5, marginBottom: 2 },
   cardUserName: { color: '#3E2723', fontSize: 23, fontWeight: '900', marginBottom: 6, letterSpacing: -0.5 },
   cardUserLevel: { color: '#E25822', fontSize: 12, fontWeight: '800', backgroundColor: '#FFFDF9', paddingVertical: 3, paddingHorizontal: 10, borderRadius: Radius.pill, alignSelf: 'flex-start', borderWidth: 1, borderColor: 'rgba(226, 88, 34, 0.15)' },
   cardShopBtn: { padding: 4, right: -4 },
   cardFlipIcon: { position: 'absolute', bottom: 14, right: 14, opacity: 0.6 },
   cardBackStats: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingLeft: 20, paddingRight: 38, width: '100%', transform: [{ translateY: -8 }] },
-  statsTitle: { color: '#3E2723', fontSize: 15, fontWeight: '900', marginTop: 8, marginBottom: 18, textAlign: 'center', letterSpacing: 0.5 },
+  statsTitle: { color: '#3E2723', fontSize: 15, fontWeight: '900', marginTop: 22, marginBottom: 14, textAlign: 'center', letterSpacing: 0.5 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.04)' },
   statsLabel: { color: '#5D4037', fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
   statsValue: { color: '#E25822', fontSize: 13, fontWeight: '800' },
