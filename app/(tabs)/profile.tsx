@@ -91,9 +91,10 @@ export default function ProfileScreen() {
   const [isFlippedState, setIsFlippedState] = useState(false);
 
   const toggleFlip = () => {
-    setIsFlippedState(!isFlippedState);
-    // withSpring으로 관성과 텐션을 주어 실제 튕기는 모션을 만듭니다.
-    flipProgress.value = withSpring(flipProgress.value === 0 ? 1 : 0, { damping: 15, stiffness: 120 });
+    const nextState = !isFlippedState;
+    setIsFlippedState(nextState);
+    // withSpring은 물리 엔진 특성상 소수점 정착 오차가 있을 수 있으므로 상태 불리언을 주축으로 타겟을 지정합니다.
+    flipProgress.value = withSpring(nextState ? 1 : 0, { damping: 15, stiffness: 120 });
   };
 
   const currentLevelInfo = calculateLevel(userExp);
@@ -109,12 +110,10 @@ export default function ProfileScreen() {
   const cardFrontFaceStyle = useAnimatedStyle(() => {
     const rotateY = interpolate(flipProgress.value, [0, 1], [0, 180]);
     const zIndex = flipProgress.value < 0.5 ? 2 : 0;
-    const opacity = flipProgress.value < 0.5 ? 1 : 0;
     return {
       backfaceVisibility: 'hidden',
       transform: [{ perspective: 1000 }, { rotateY: `${rotateY}deg` }],
       zIndex,
-      opacity,
       position: 'absolute',
       top: 0, left: 0, right: 0, bottom: 0,
     };
@@ -123,12 +122,10 @@ export default function ProfileScreen() {
   const cardBackFaceStyle = useAnimatedStyle(() => {
     const rotateY = interpolate(flipProgress.value, [0, 1], [-180, 0]);
     const zIndex = flipProgress.value >= 0.5 ? 2 : 0;
-    const opacity = flipProgress.value >= 0.5 ? 1 : 0;
     return {
       backfaceVisibility: 'hidden',
       transform: [{ perspective: 1000 }, { rotateY: `${rotateY}deg` }],
       zIndex,
-      opacity,
       position: 'absolute',
       top: 0, left: 0, right: 0, bottom: 0,
     };
@@ -295,9 +292,11 @@ export default function ProfileScreen() {
             <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}><Text style={styles.logoutBtnText}>로그아웃</Text></TouchableOpacity>
           </View>
 
-          {/* 3D 홀로그램 셰프 카드 */}
-          <View style={styles.cardContainer}>
-            <TouchableOpacity activeOpacity={0.9} onPress={toggleFlip} style={{ height: 180 }}>
+          {/* 🎛️ 통합 대시보드 스택 (단일 구조 그림자) */}
+          <View style={styles.dashboardWrapper}>
+            {/* 3D 홀로그램 셰프 카드 */}
+            <View style={styles.cardContainer}>
+              <TouchableOpacity activeOpacity={0.9} onPress={toggleFlip} style={{ height: 180 }}>
               {/* 앞면: 셰프 정보 */}
               <Animated.View 
                 pointerEvents={isFlippedState ? 'none' : 'auto'}
@@ -373,7 +372,7 @@ export default function ProfileScreen() {
 
           {/* 📊 미니 레벨 바 (셰프 카드와 자연스럽게 연결) */}
           <View style={styles.attachedLevelBar}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6, paddingHorizontal: 4 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6, paddingHorizontal: 4, zIndex: 2 }}>
               <Text style={styles.attachedLevelText}>Lv.{currentLevelInfo.level} {currentLevelInfo.title.substring(2)}</Text>
               <Text style={styles.attachedExpText}>{expProgress.toFixed(0)}%</Text>
             </View>
@@ -420,6 +419,7 @@ export default function ProfileScreen() {
               </View>
               <Text style={styles.quickMenuLabel}>칭호/뱃지</Text>
             </TouchableOpacity>
+          </View>
           </View>
 
 
@@ -631,14 +631,15 @@ const styles = StyleSheet.create({
   modernEditBtn: { padding: 8 },
 
   // 3D Card Styles
-  cardContainer: { height: 180, marginBottom: 0 },
-  threeDCard: { width: '100%', height: 180, borderRadius: Radius.lg, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(0,0,0,0.04)', ...Shadows.soft, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
-  attachedLevelBar: { marginTop: -1, marginBottom: 25, backgroundColor: '#FFF', paddingVertical: 10, paddingHorizontal: 16, borderBottomLeftRadius: 16, borderBottomRightRadius: 16, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.03)', ...Shadows.soft, borderWidth: 1, borderColor: 'rgba(0,0,0,0.04)' },
+  dashboardWrapper: { width: '100%', backgroundColor: '#FFF', borderRadius: Radius.lg, ...Shadows.soft, marginBottom: 30 },
+  cardContainer: { height: 180, marginBottom: 0, zIndex: 2 },
+  threeDCard: { width: '100%', height: 180, borderRadius: Radius.lg, borderWidth: 1, borderColor: 'rgba(0,0,0,0.04)' },
+  attachedLevelBar: { marginTop: -22, marginBottom: 0, backgroundColor: '#FFF', paddingTop: 32, paddingBottom: 11, paddingHorizontal: 16, borderTopWidth: 0, borderBottomWidth: 0, borderWidth: 1, borderColor: 'rgba(0,0,0,0.04)', zIndex: 1 },
   attachedLevelText: { color: '#3E2723', fontSize: 13, fontWeight: '800', letterSpacing: -0.2 },
   attachedExpText: { color: '#E25822', fontSize: 12, fontWeight: '800' },
   attachedBarBg: { width: '100%', height: 6, backgroundColor: '#F0E7E0', borderRadius: 3, overflow: 'hidden' },
   attachedBarFill: { height: '100%', backgroundColor: '#E25822', borderRadius: 3 },
-  cardGradient: { flex: 1 },
+  cardGradient: { flex: 1, borderRadius: Radius.lg, overflow: 'hidden' },
   cardGlassOverlay: { flex: 1, backgroundColor: 'rgba(255,255,255,0.1)', padding: 18, justifyContent: 'space-between' },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   cardGradeText: { color: '#8A5A44', fontSize: 11, fontWeight: '800', letterSpacing: 0.8, opacity: 0.8 },
@@ -655,7 +656,7 @@ const styles = StyleSheet.create({
   statsLabel: { color: '#5D4037', fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
   statsValue: { color: '#E25822', fontSize: 13, fontWeight: '800' },
 
-  quickMenuCard: { flexDirection: 'row', backgroundColor: Colors.bgElevated, borderRadius: Radius.lg, paddingVertical: 18, marginBottom: 30, elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, borderWidth: 1, borderColor: 'rgba(0,0,0,0.04)' },
+  quickMenuCard: { flexDirection: 'row', backgroundColor: Colors.bgElevated, borderBottomLeftRadius: Radius.lg, borderBottomRightRadius: Radius.lg, paddingVertical: 18, marginBottom: 0, borderWidth: 1, borderTopWidth: 0, borderColor: 'rgba(0,0,0,0.04)', marginTop: -1 },
   quickMenuItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   quickMenuIconBg: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
   quickMenuLabel: { fontSize: 14, fontWeight: '700', color: Colors.textMain },
